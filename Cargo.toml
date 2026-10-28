@@ -1,0 +1,156 @@
+[package]
+name = "json-rpc-2-oauth2"
+version = "0.1.0"
+edition = "2024"
+description = "OAuth 2.0 authentication and RBAC authorization for JSON-RPC-2"
+
+[features]
+default = ["all-storages", "all-oauth-providers"]
+all-storages = [
+    "mongodb",
+    "sqlite",
+    "sqlx",
+    "redis",
+    "oracle",
+    "mssql",
+    "cassandra",
+    "hbase",
+]
+all-oauth-providers = [
+    "oauth-google",
+    "oauth-firebase-authentication",
+    "oauth-apple",
+    "oauth-microsoft",
+    "oauth-facebook",
+    "oauth-x",
+    "oauth-linkedin",
+    "oauth-slack",
+    "oauth-github",
+    "oauth-gitlab",
+    "oauth-bitbucket",
+    "oauth-discord",
+    "oauth-twitch",
+    "oauth-spotify",
+    "oauth-auth0",
+    "oauth-okta",
+]
+oauth2 = ["all-oauth-providers"]
+auth-storage-core = []
+mongodb = ["auth-storage-core", "dep:mongodb"]
+sqlite = [
+    "auth-storage-core",
+    "dep:sqlx-driver",
+    "sqlx-driver/sqlite",
+    "sqlx-driver/runtime-tokio-rustls",
+]
+sqlx = [
+    "auth-storage-core",
+    "dep:sqlx-driver",
+    "sqlx-driver/any",
+    "sqlx-driver/mysql",
+    "sqlx-driver/postgres",
+    "sqlx-driver/sqlite",
+    "sqlx-driver/runtime-tokio-rustls",
+]
+postgres = ["sqlx"]
+mysql = ["sqlx"]
+redis = ["auth-storage-core", "dep:redis", "dep:sha2"]
+oracle = ["auth-storage-core", "dep:oracle-rs"]
+mssql = ["auth-storage-core", "dep:tiberius", "dep:tokio-util"]
+cassandra = ["auth-storage-core", "dep:scylla"]
+hbase = ["auth-storage-core", "dep:hbase-thrift", "dep:thrift", "dep:tokio-util"]
+oauth-provider-core = ["dep:jsonwebtoken", "dep:reqwest", "dep:sha2"]
+oauth-google = ["oauth-provider-core"]
+oauth-firebase-authentication = ["oauth-provider-core"]
+oauth-apple = ["oauth-provider-core"]
+oauth-microsoft = ["oauth-provider-core"]
+oauth-facebook = ["oauth-provider-core"]
+oauth-x = ["oauth-provider-core"]
+oauth-linkedin = ["oauth-provider-core"]
+oauth-slack = ["oauth-provider-core"]
+oauth-github = ["oauth-provider-core"]
+oauth-gitlab = ["oauth-provider-core"]
+oauth-bitbucket = ["oauth-provider-core"]
+oauth-discord = ["oauth-provider-core"]
+oauth-twitch = ["oauth-provider-core"]
+oauth-spotify = ["oauth-provider-core"]
+oauth-auth0 = ["oauth-provider-core"]
+oauth-okta = ["oauth-provider-core"]
+
+[dependencies]
+argon2 = "0.5"
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+hbase-thrift = { version = "1.2", optional = true }
+jsonwebtoken = { version = "9", optional = true }
+mongodb = { version = "3", optional = true }
+oracle-rs = { version = "0.1.7", optional = true }
+pasetors = "0.8"
+password-hash = { version = "0.5", features = ["getrandom"] }
+redis = { version = "0.32.7", features = ["connection-manager", "tokio-comp"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+scylla = { version = "1.2.0", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = { version = "0.10", optional = true }
+sqlx-driver = { package = "sqlx", version = "0.8", default-features = false, optional = true }
+tiberius = { version = "0.13", default-features = false, features = ["rustls", "tds73"], optional = true }
+thiserror = "2"
+thrift = { version = "0.17", optional = true }
+tokio = { version = "1", features = ["net", "rt", "sync"] }
+tokio-util = { version = "0.7", features = ["compat"], optional = true }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+json-rpc-2-server = { git = "https://github.com/vsvictor/JSON-RPC-2", rev = "6666cceeb27b3ed1d5297f2503b9995937c6b9d1" }
+
+[dev-dependencies]
+testcontainers-modules = { version = "0.15", features = ["mongo", "mssql_server", "mysql", "oracle", "postgres", "redis", "scylladb"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "cassandra_backend"
+path = "tests/cassandra_backend.rs"
+required-features = ["cassandra"]
+
+[[test]]
+name = "hbase_backend"
+path = "tests/hbase_backend.rs"
+required-features = ["hbase"]
+
+[[test]]
+name = "mongodb"
+path = "tests/mongodb.rs"
+required-features = ["mongodb"]
+
+[[test]]
+name = "mssql_backend"
+path = "tests/mssql_backend.rs"
+required-features = ["mssql"]
+
+[[test]]
+name = "oracle_backend"
+path = "tests/oracle_backend.rs"
+required-features = ["oracle"]
+
+[[test]]
+name = "redis_backend"
+path = "tests/redis_backend.rs"
+required-features = ["redis"]
+
+[[test]]
+name = "sqlx_backends"
+path = "tests/sqlx_backends.rs"
+required-features = ["sqlx"]
+
+[[example]]
+name = "sqlite_jsonrpc"
+required-features = ["sqlite"]
+
+[[example]]
+name = "mongodb_auth"
+required-features = ["mongodb"]
+
+[[example]]
+name = "google_oauth"
+required-features = ["sqlite", "oauth-google"]
