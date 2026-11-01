@@ -269,6 +269,8 @@ pub trait JsonRpcAuthServer: Send + Sync {
         let identity = crate::oauth2_providers::exchange_code(req).await?;
         self.handle_external_login(identity).await
     }
+    async fn handle_get_profile(&self, user_id: String)
+    -> Result<UserResponse, Self::StorageError>;
     async fn handle_update_profile(
         &self,
         user_id: String,

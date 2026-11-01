@@ -105,6 +105,21 @@ See the runnable [`annotated_rpc`](examples/annotated_rpc.rs) example.
 
 ## Storage implementations
 
+### Read the current profile
+
+`auth.getProfile` authenticates `params.access_token` or
+`params.authorization = "Bearer <access-token>"` and reads the current
+`UserResponse` from storage: `id`, `email`, `created_at`, `roles`, and `profile`.
+It never accepts a client-selected user ID or exposes password hashes.
+Unlike token claims, returned roles reflect current storage data.
+All storage implementations expose `JsonRpcAuthServer::handle_get_profile`;
+custom implementations must implement this new required trait method.
+The plugin and MongoDB's legacy RPC registration both register this reader.
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"auth.getProfile","params":{"access_token":"<access-token>"}}
+```
+
 Client integration examples for [Kotlin Multiplatform](https://github.com/vsvictor/JSON-RPC-2-OAuth2/tree/master/examples/kotlin-multiplatform)
 and [Flutter](https://github.com/vsvictor/JSON-RPC-2-OAuth2/tree/master/examples/flutter)
 are available under the examples directory.

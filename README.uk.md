@@ -106,6 +106,21 @@ snapshot-семантику до завершення строку дії чи �
 
 ## Реалізації сховищ
 
+### Отримання актуального профілю
+
+`auth.getProfile` перевіряє `params.access_token` або
+`params.authorization = "Bearer <access-token>"` і читає зі сховища актуальний
+`UserResponse`: `id`, `email`, `created_at`, `roles` та `profile`.
+Метод не дозволяє вибирати іншого користувача через параметри й не повертає
+хеш пароля. На відміну від claims токена, ролі читаються зі сховища.
+Усі storage реалізують `JsonRpcAuthServer::handle_get_profile`; власні
+реалізації мають додати цей новий обов'язковий метод трейту.
+Метод реєструють як плагін, так і старий RPC-реєстратор MongoDB.
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"auth.getProfile","params":{"access_token":"<access-token>"}}
+```
+
 Приклади клієнтської інтеграції для
 [Kotlin Multiplatform](https://github.com/vsvictor/JSON-RPC-2-OAuth2/tree/master/examples/kotlin-multiplatform)
 і [Flutter](https://github.com/vsvictor/JSON-RPC-2-OAuth2/tree/master/examples/flutter)

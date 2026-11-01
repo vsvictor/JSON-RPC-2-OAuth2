@@ -15,6 +15,7 @@ pub fn register_auth_methods<S>(
 where
     S: JsonRpcAuthServer<StorageError = AuthError> + Clone + 'static,
 {
+    register_profile_reader(storage.clone(), server)?;
     let service = storage.clone();
     server.register("auth.register", move |params| {
         let service = service.clone();
@@ -128,6 +129,28 @@ where
     })?;
 
     Ok(())
+}
+
+pub(crate) fn register_profile_reader<S>(
+    storage: S,
+    server: &json_rpc_2_server::RpcServer,
+) -> Result<(), json_rpc_2_server::RegistrationError>
+where
+    S: JsonRpcAuthServer<StorageError = AuthError> + Clone + 'static,
+{
+    let plugin = crate::AuthPlugin::new(storage.clone());
+    server.register("auth.getProfile", move |params| {
+        let storage = storage.clone();
+        let plugin = plugin.clone();
+        async move {
+            let request = plugin.authorize(params, &[])?;
+            let user = storage
+                .handle_get_profile(request.claims.subject)
+                .await
+                .map_err(AuthError::into_rpc_error)?;
+            to_value(user)
+        }
+    })
 }
 
 fn authorize<S>(

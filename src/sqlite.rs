@@ -512,6 +512,13 @@ impl JsonRpcAuthServer for SqliteAuthServer {
         }
     }
 
+    async fn handle_get_profile(
+        &self,
+        user_id: String,
+    ) -> Result<UserResponse, Self::StorageError> {
+        self.load_user(&user_id).await
+    }
+
     async fn handle_update_profile(
         &self,
         user_id: String,

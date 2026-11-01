@@ -16,6 +16,59 @@ use serde_json::{Value, json};
 
 static CALLS: AtomicUsize = AtomicUsize::new(0);
 
+#[tokio::test]
+async fn profile_reader_returns_current_storage_data_for_authenticated_subject() {
+    let auth = storage(TokenConfig::new("profile-test"));
+    let rpc = RpcServer::new();
+    AuthPlugin::new(auth.clone()).install(&rpc).await.unwrap();
+    let user = auth
+        .handle_register(RegisterRequest {
+            email: "profile@example.test".into(),
+            password: "profile-test-password".into(),
+            profile: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let tokens = auth
+        .handle_login(LoginRequest {
+            email: "profile@example.test".into(),
+            password: "profile-test-password".into(),
+            grant_type: "password".into(),
+        })
+        .await
+        .unwrap();
+    auth.handle_add_role(user.id.clone(), "new-role".into())
+        .await
+        .unwrap();
+    for params in [
+        json!({"access_token": tokens.access_token, "user_id": "another-user"}),
+        json!({"authorization": format!("Bearer {}", tokens.access_token)}),
+    ] {
+        let response = call(&rpc, "auth.getProfile", params).await;
+        assert_eq!(response["result"]["id"], user.id);
+        assert_eq!(response["result"]["email"], user.email);
+        assert_eq!(response["result"]["roles"], json!(["new-role"]));
+        assert_eq!(response["result"]["profile"], json!({}));
+        assert!(response["result"].get("password_hash").is_none());
+    }
+    for params in [
+        json!({}),
+        json!({"access_token": "invalid"}),
+        json!({"access_token": tokens.refresh_token}),
+        json!({"access_token": tokens.access_token, "authorization": format!("Bearer {}", tokens.access_token)}),
+    ] {
+        assert_eq!(
+            call(&rpc, "auth.getProfile", params).await["error"]["code"],
+            -32001
+        );
+    }
+    assert!(
+        auth.handle_get_profile("missing-user".into())
+            .await
+            .is_err()
+    );
+}
+
 #[authorize(scopes = "navi.read navi.write")]
 async fn protected<S>(auth: AuthPlugin<S>, request: AuthorizedRequest) -> Result<Value, RpcError>
 where

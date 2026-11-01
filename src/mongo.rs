@@ -115,6 +115,7 @@ impl MongoAuthServer {
         &self,
         server: &json_rpc_2_server::RpcServer,
     ) -> Result<(), json_rpc_2_server::RegistrationError> {
+        crate::rpc::register_profile_reader(self.clone(), server)?;
         let service = self.clone();
         server.register("auth.register", move |params| {
             let service = service.clone();
@@ -621,6 +622,18 @@ impl JsonRpcAuthServer for MongoAuthServer {
                 }
             })?;
         Ok(())
+    }
+
+    async fn handle_get_profile(
+        &self,
+        user_id: String,
+    ) -> Result<UserResponse, Self::StorageError> {
+        let object_id = parse_object_id(&user_id)?;
+        let user = users(self.database()?)
+            .find_one(doc! { "_id": object_id })
+            .await?
+            .ok_or_else(|| AuthError::InvalidParams("user not found".to_owned()))?;
+        self.user_response(user).await
     }
 
     async fn handle_update_profile(
