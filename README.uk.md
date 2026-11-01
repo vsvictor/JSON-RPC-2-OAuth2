@@ -9,6 +9,101 @@
 Автентифікація OAuth 2.0 за паролем, access/refresh-токени PASETO v4.local,
 динамічні профілі користувачів і рольова авторизація для сервера `json-rpc-2`.
 
+## Плагін бекенду та анотації методів
+
+`AuthPlugin<S>` реалізує `ServerPlugin` JSON-RPC-2 для будь-якого клонованого
+`JsonRpcAuthServer<StorageError = AuthError>`. Встановлення ініціалізує сховище
+та реєструє наявні RPC-методи автентифікації, профілю й RBAC. У залежності
+вимкніть default features і виберіть потрібне сховище та `annotations`:
+
+```toml
+[dependencies]
+json-rpc-2-oauth2 = { git = "https://github.com/vsvictor/JSON-RPC-2-OAuth2", default-features = false, features = ["sqlite", "annotations"] }
+json-rpc-2-backend = { git = "https://github.com/vsvictor/JSON-RPC-2.git", rev = "e292d0633cfde90abf0851c965cbf06d07682ba8" }
+serde_json = "1"
+anyhow = "1"
+
+[patch.crates-io]
+h3 = { git = "https://github.com/hyperium/h3", package = "h3" }
+h3-quinn = { git = "https://github.com/hyperium/h3", package = "h3-quinn" }
+```
+
+Ця ревізія бекенду використовує ті самі HTTP/3 compatibility patches, що й
+BRNavi. Залиште їх у маніфесті workspace хоста та додайте його lockfile до Git.
+
+Усі крейти JSON-RPC-2 у хості мають використовувати ту саму Git-адресу й
+ревізію `e292d0633cfde90abf0851c965cbf06d07682ba8`, що й плагін.
+Попередня зафіксована ревізія сервера ще не мала плагінного lifecycle;
+типи сервера з різних ревізій несумісні.
+
+```rust,ignore
+use json_rpc_2_backend::BackendBuilder;
+use json_rpc_2_oauth2::{
+    authorize, AuthPlugin, AuthorizedRequest, JsonRpcAuthServer,
+    RpcError, SqliteAuthServer, TokenConfig,
+};
+use serde_json::{json, Value};
+
+#[authorize(scopes = "navi.read")]
+async fn route(
+    auth: AuthPlugin<SqliteAuthServer>,
+    request: AuthorizedRequest,
+) -> Result<Value, RpcError> {
+    Ok(json!({
+        "user_id": request.claims.subject,
+        "destination": request.params["destination"],
+    }))
+}
+
+async fn run() -> anyhow::Result<()> {
+    let key = std::env::var("PASETO_LOCAL_KEY")?;
+    let mut storage = SqliteAuthServer::new(&key, TokenConfig::new("brnavi"))?;
+    storage.set_db_host(&std::env::var("AUTH_DATABASE_PATH")?);
+    let auth = AuthPlugin::new(storage);
+    let methods = auth.clone();
+    let backend = BackendBuilder::from_dotenv()?
+        .configure(move |rpc| {
+            methods.register(rpc, "navi.route", route)?;
+            Ok(())
+        })
+        .plugin(auth)
+        .build()
+        .await?;
+    backend.run_until_signal().await
+}
+```
+
+`#[authorize]` вимагає чинного access-токена.
+`#[authorize(scopes = "a b")]` вимагає **кожного** зазначеного RBAC-дозволу:
+це дозволи застосунку, а не OAuth consent scopes зовнішнього провайдера.
+Невідомі параметри анотації, порожні scopes, неасинхронні функції та сигнатури
+без двох іменованих аргументів спричиняють помилку компіляції.
+У вихідній функції другий аргумент має тип `AuthorizedRequest`; згенерована
+функція приймає JSON-параметри й перевіряє їх до виконання handler-а.
+Реєструйте її через `AuthPlugin::register`. `request.claims` містить перевіреного
+користувача, а `request.params` — бізнес-параметри без облікових даних.
+
+Клієнт передає або `params.access_token`, або
+`params.authorization = "Bearer <token>"`, але не обидва поля.
+Невалідні, прострочені та refresh-токени повертають `-32001`; недостатні
+дозволи — `-32003`. Поля автентифікації видаляються до виклику handler-а.
+Заявлені клієнтом subject, ролі чи дозволи не є джерелом довіри.
+Механізм працює з усіма транспортами та batch-запитами без спеціального
+HTTP-заголовка шлюзу. У недовірених мережах використовуйте шифрування:
+анотація сама не шифрує TCP/UDP чи незахищений брокерний трафік.
+
+Методи без анотації зберігають наявну політику: встановлення плагіна не
+захищає весь бекенд автоматично. Реєстрація, вхід і поновлення токенів
+залишаються доступними. Помилка ініціалізації чи дубль методу перериває
+встановлення; частково налаштований сервер потрібно відкинути.
+
+Для кількох інстансів потрібні спільне сховище та однакові, безпечно передані
+PASETO-ключ й issuer. Дозволи у вже виданому токені зберігають наявну
+snapshot-семантику до завершення строку дії чи видачі поновленого токена.
+Окремі SQLite у пам'яті придатні лише для демонстрації, не для спільних
+користувачів двох інстансів. Виконуваний приклад:
+[`annotated_rpc`](examples/annotated_rpc.rs).
+
 ## Реалізації сховищ
 
 Приклади клієнтської інтеграції для

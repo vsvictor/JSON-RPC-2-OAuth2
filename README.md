@@ -9,6 +9,100 @@
 OAuth 2.0 password-grant authentication, PASETO v4.local access/refresh tokens,
 dynamic user profiles and role-based authorization for the `json-rpc-2` server.
 
+## Backend plugin and method annotations
+
+`AuthPlugin<S>` implements JSON-RPC-2's `ServerPlugin` for any cloneable
+`JsonRpcAuthServer<StorageError = AuthError>`. Installation initializes storage
+and registers the existing authentication/profile/RBAC RPC methods. Select
+only the needed storage and the `annotations` feature:
+
+```toml
+[dependencies]
+json-rpc-2-oauth2 = { git = "https://github.com/vsvictor/JSON-RPC-2-OAuth2", default-features = false, features = ["sqlite", "annotations"] }
+json-rpc-2-backend = { git = "https://github.com/vsvictor/JSON-RPC-2.git", rev = "e292d0633cfde90abf0851c965cbf06d07682ba8" }
+serde_json = "1"
+anyhow = "1"
+
+[patch.crates-io]
+h3 = { git = "https://github.com/hyperium/h3", package = "h3" }
+h3-quinn = { git = "https://github.com/hyperium/h3", package = "h3-quinn" }
+```
+
+The backend revision uses the same HTTP/3 compatibility patches as BRNavi.
+Keep these in the host workspace manifest and commit its lockfile.
+
+All JSON-RPC-2 crates in the host must use the same Git URL and revision as
+this plugin (`e292d0633cfde90abf0851c965cbf06d07682ba8`). The previous pinned
+server revision lacked the plugin lifecycle. Do not mix distinct server
+types from different revisions.
+
+```rust,ignore
+use json_rpc_2_backend::BackendBuilder;
+use json_rpc_2_oauth2::{
+    authorize, AuthPlugin, AuthorizedRequest, JsonRpcAuthServer,
+    RpcError, SqliteAuthServer, TokenConfig,
+};
+use serde_json::{json, Value};
+
+#[authorize(scopes = "navi.read")]
+async fn route(
+    auth: AuthPlugin<SqliteAuthServer>,
+    request: AuthorizedRequest,
+) -> Result<Value, RpcError> {
+    Ok(json!({
+        "user_id": request.claims.subject,
+        "destination": request.params["destination"],
+    }))
+}
+
+async fn run() -> anyhow::Result<()> {
+    let key = std::env::var("PASETO_LOCAL_KEY")?;
+    let mut storage = SqliteAuthServer::new(&key, TokenConfig::new("brnavi"))?;
+    storage.set_db_host(&std::env::var("AUTH_DATABASE_PATH")?);
+    let auth = AuthPlugin::new(storage);
+    let methods = auth.clone();
+    let backend = BackendBuilder::from_dotenv()?
+        .configure(move |rpc| {
+            methods.register(rpc, "navi.route", route)?;
+            Ok(())
+        })
+        .plugin(auth)
+        .build()
+        .await?;
+    backend.run_until_signal().await
+}
+```
+
+`#[authorize]` requires a valid access token. `#[authorize(scopes = "a b")]`
+requires **every** listed RBAC permission; these are application permission
+names, not third-party OAuth consent scopes. Unknown options, empty scopes,
+non-async functions, and signatures other than two named arguments are
+compile-time errors. The second argument is an `AuthorizedRequest` in the
+source; the generated callable takes JSON parameters and validates them before
+the original handler body runs. Register it through `AuthPlugin::register`.
+`request.claims` contains the verified principal and `request.params` contains
+only business parameters.
+
+Clients send either `params.access_token` or
+`params.authorization = "Bearer <token>"`, never both. Invalid, expired, or
+refresh tokens return `-32001`; insufficient permissions return `-32003`.
+Credentials are removed before the handler runs. No trust is placed in
+client-supplied subjects, roles, or permission fields. This works with all
+transports and batches, without a gateway-specific authentication header.
+Use encrypted transports on untrusted networks: an annotation does not
+encrypt plaintext TCP/UDP/broker traffic.
+
+Unannotated methods keep their existing policy; installing the plugin does
+not silently secure the entire backend. Auth registration/login/refresh remain
+available for obtaining tokens. Duplicate registration or initialization
+failure aborts installation; discard a partially configured server.
+
+For multiple backend instances, use shared storage and the same securely
+provisioned PASETO key/issuer. Permissions in an issued token retain the
+existing snapshot semantics until it expires or a refreshed token is issued.
+Per-instance in-memory SQLite is only a demo, not a distributed user store.
+See the runnable [`annotated_rpc`](examples/annotated_rpc.rs) example.
+
 ## Storage implementations
 
 Client integration examples for [Kotlin Multiplatform](https://github.com/vsvictor/JSON-RPC-2-OAuth2/tree/master/examples/kotlin-multiplatform)

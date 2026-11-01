@@ -20,6 +20,7 @@ mod mssql_backend;
 mod oauth2_providers;
 #[cfg(feature = "oracle")]
 mod oracle_backend;
+mod plugin;
 #[cfg(feature = "mongodb")]
 mod profile;
 #[cfg(any(
@@ -45,6 +46,9 @@ mod token;
 pub use error::AuthError;
 #[cfg(feature = "hbase")]
 pub use hbase_backend::HbaseAuthServer;
+#[cfg(feature = "annotations")]
+pub use json_rpc_2_oauth2_macros::authorize;
+pub use json_rpc_2_server::{RpcError, RpcServer, ServerPlugin};
 pub use models::{
     DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest, OAuth2Provider, ProfileFieldType,
     ProviderAuthorization, ProviderAuthorizationRequest, ProviderCallbackRequest, RegisterRequest,
@@ -56,6 +60,7 @@ pub use mongo::MongoAuthServer;
 pub use mssql_backend::MssqlAuthServer;
 #[cfg(feature = "oracle")]
 pub use oracle_backend::OracleAuthServer;
+pub use plugin::{AuthPlugin, AuthorizedRequest};
 #[cfg(feature = "redis")]
 pub use redis_backend::RedisAuthServer;
 pub use rpc::register_auth_methods;
@@ -66,3 +71,8 @@ pub use sqlite::SqliteAuthServer;
 #[cfg(feature = "sqlx")]
 pub use sqlx_backend::{SqlDatabase, SqlxAuthServer};
 pub use token::{AccessTokenClaims, TokenConfig};
+
+#[doc(hidden)]
+pub mod __private {
+    pub use serde_json::Value;
+}

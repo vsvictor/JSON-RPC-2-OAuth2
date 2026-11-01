@@ -179,11 +179,13 @@ impl TokenService {
     }
 
     fn decrypt(&self, token: &str) -> Result<pasetors::claims::Claims, AuthError> {
-        let untrusted = UntrustedToken::<Local, V4>::try_from(token).map_err(token_error)?;
+        let untrusted = UntrustedToken::<Local, V4>::try_from(token)
+            .map_err(|_| AuthError::Unauthorized)?;
         let mut validation = ClaimsValidationRules::new();
         validation.validate_issuer_with(&self.config.issuer);
         let trusted =
-            local::decrypt(&self.key, &untrusted, &validation, None, None).map_err(token_error)?;
+            local::decrypt(&self.key, &untrusted, &validation, None, None)
+                .map_err(|_| AuthError::Unauthorized)?;
         trusted
             .payload_claims()
             .cloned()

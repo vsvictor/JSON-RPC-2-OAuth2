@@ -2039,7 +2039,7 @@ dependencies = [
 [[package]]
 name = "json-rpc-2-core"
 version = "0.1.0"
-source = "git+https://github.com/vsvictor/JSON-RPC-2?rev=6666cceeb27b3ed1d5297f2503b9995937c6b9d1#6666cceeb27b3ed1d5297f2503b9995937c6b9d1"
+source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=e292d0633cfde90abf0851c965cbf06d07682ba8#e292d0633cfde90abf0851c965cbf06d07682ba8"
 dependencies = [
  "aes-gcm",
  "bytes",
@@ -2049,14 +2049,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "json-rpc-2-macros"
+version = "0.1.0"
+source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=e292d0633cfde90abf0851c965cbf06d07682ba8#e292d0633cfde90abf0851c965cbf06d07682ba8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "json-rpc-2-oauth2"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "argon2",
  "async-trait",
  "base64 0.22.1",
  "chrono",
  "hbase-thrift",
+ "json-rpc-2-oauth2-macros",
  "json-rpc-2-server",
  "jsonwebtoken",
  "mongodb",
@@ -2081,14 +2093,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "json-rpc-2-oauth2-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "json-rpc-2-server"
 version = "0.1.0"
-source = "git+https://github.com/vsvictor/JSON-RPC-2?rev=6666cceeb27b3ed1d5297f2503b9995937c6b9d1#6666cceeb27b3ed1d5297f2503b9995937c6b9d1"
+source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=e292d0633cfde90abf0851c965cbf06d07682ba8#e292d0633cfde90abf0851c965cbf06d07682ba8"
 dependencies = [
+ "anyhow",
  "arc-swap",
  "bytes",
  "json-rpc-2-core",
+ "json-rpc-2-macros",
  "json-rpc-2-transport",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "tokio",
@@ -2098,7 +2123,7 @@ dependencies = [
 [[package]]
 name = "json-rpc-2-transport"
 version = "0.1.0"
-source = "git+https://github.com/vsvictor/JSON-RPC-2?rev=6666cceeb27b3ed1d5297f2503b9995937c6b9d1#6666cceeb27b3ed1d5297f2503b9995937c6b9d1"
+source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=e292d0633cfde90abf0851c965cbf06d07682ba8#e292d0633cfde90abf0851c965cbf06d07682ba8"
 dependencies = [
  "bytes",
  "http-body",
@@ -2866,6 +2891,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a65843dfefbafd3c879c683306959a6de478443ffe9c9adf02f5976432402d7"
 
 [[package]]
+name = "proc-macro-crate"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
+dependencies = [
+ "toml_edit",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3429,8 +3463,21 @@ checksum = "ab508826f74a77ca9d5aba6ff19b522583ee3eaf28a19384ff3d0e5835fadf6e"
 dependencies = [
  "dyn-clone",
  "ref-cast",
+ "schemars_derive",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1c3a92094fa7d61aa124645844facb6b554dfc797136d0f5fd1f890e2bffc69"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -3597,6 +3644,17 @@ name = "serde_derive"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4427,6 +4485,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml_datetime"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.25.17+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3641d5bbb5349a79e1020a242d251efbc546ad8048d133958323ce9c40a9c9c"
+dependencies = [
+ "indexmap 2.14.2",
+ "toml_datetime",
+ "toml_parser",
+ "winnow",
+]
+
+[[package]]
+name = "toml_parser"
+version = "1.1.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
+dependencies = [
+ "winnow",
+]
+
+[[package]]
 name = "tonic"
 version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5114,6 +5202,15 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winnow"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "wit-bindgen"

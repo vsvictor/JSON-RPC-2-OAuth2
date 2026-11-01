@@ -5,7 +5,8 @@ edition = "2024"
 description = "OAuth 2.0 authentication and RBAC authorization for JSON-RPC-2"
 
 [features]
-default = ["all-storages", "all-oauth-providers"]
+default = ["all-storages", "all-oauth-providers", "annotations"]
+annotations = ["dep:json-rpc-2-oauth2-macros"]
 all-storages = [
     "mongodb",
     "sqlite",
@@ -78,6 +79,8 @@ oauth-auth0 = ["oauth-provider-core"]
 oauth-okta = ["oauth-provider-core"]
 
 [dependencies]
+anyhow = "1"
+json-rpc-2-oauth2-macros = { path = "macros", version = "0.1.0", optional = true }
 argon2 = "0.5"
 async-trait = "0.1"
 base64 = "0.22"
@@ -102,11 +105,20 @@ tokio = { version = "1", features = ["net", "rt", "sync"] }
 tokio-util = { version = "0.7", features = ["compat"], optional = true }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-json-rpc-2-server = { git = "https://github.com/vsvictor/JSON-RPC-2", rev = "6666cceeb27b3ed1d5297f2503b9995937c6b9d1" }
+json-rpc-2-server = { git = "https://github.com/vsvictor/JSON-RPC-2.git", rev = "e292d0633cfde90abf0851c965cbf06d07682ba8" }
+
+[workspace]
+members = ["macros"]
+resolver = "2"
 
 [dev-dependencies]
 testcontainers-modules = { version = "0.15", features = ["mongo", "mssql_server", "mysql", "oracle", "postgres", "redis", "scylladb"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "plugin"
+path = "tests/plugin/tests.rs"
+required-features = ["sqlite", "annotations"]
 
 [[test]]
 name = "cassandra_backend"
@@ -142,6 +154,10 @@ required-features = ["redis"]
 name = "sqlx_backends"
 path = "tests/sqlx_backends.rs"
 required-features = ["sqlx"]
+
+[[example]]
+name = "annotated_rpc"
+required-features = ["sqlite", "annotations"]
 
 [[example]]
 name = "sqlite_jsonrpc"

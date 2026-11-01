@@ -6,6 +6,7 @@ avoid compiling unrelated storage backends.
 
 | Example | Demonstrates | Run |
 | --- | --- | --- |
+| `annotated_rpc` | Storage-independent plugin installation and an annotation-protected RPC handler | `cargo run --example annotated_rpc --no-default-features --features sqlite,annotations` |
 | `sqlite_jsonrpc` | SQLite storage, profile schema, RBAC, method registration and an in-process JSON-RPC request | `cargo run --example sqlite_jsonrpc --no-default-features --features sqlite` |
 | `mongodb_auth` | MongoDB connection configuration, profile schema and user registration | `cargo run --example mongodb_auth --no-default-features --features mongodb` |
 | `google_oauth` | Starting a Google authorization-code flow and completing its callback (manual CLI callback input) | `cargo run --example google_oauth --no-default-features --features sqlite,oauth-google` |
@@ -33,6 +34,7 @@ local demonstration only.
 
 | Приклад | Демонстрація | Запуск |
 | --- | --- | --- |
+| `annotated_rpc` | Встановлення плагіна та RPC-handler із перевіркою токена й дозволу через анотацію | `cargo run --example annotated_rpc --no-default-features --features sqlite,annotations` |
 | `sqlite_jsonrpc` | SQLite, схема профілю, RBAC, реєстрація методів та JSON-RPC-запит у пам'яті | `cargo run --example sqlite_jsonrpc --no-default-features --features sqlite` |
 | `mongodb_auth` | Налаштування з'єднання MongoDB, схема профілю та реєстрація користувача | `cargo run --example mongodb_auth --no-default-features --features mongodb` |
 | `google_oauth` | Початок Google authorization-code flow та завершення callback (введення даних callback у CLI) | `cargo run --example google_oauth --no-default-features --features sqlite,oauth-google` |
