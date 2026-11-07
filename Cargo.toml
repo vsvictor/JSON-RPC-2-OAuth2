@@ -105,7 +105,7 @@ tokio = { version = "1", features = ["net", "rt", "sync"] }
 tokio-util = { version = "0.7", features = ["compat"], optional = true }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-json-rpc-2-server = { git = "https://github.com/vsvictor/JSON-RPC-2.git", rev = "e292d0633cfde90abf0851c965cbf06d07682ba8" }
+json-rpc-2-server = { git = "https://github.com/vsvictor/JSON-RPC-2.git", rev = "2c7ede5c8f2fb5d3c26cbd3b92678764a4d0f381" }
 
 [workspace]
 members = ["macros"]
