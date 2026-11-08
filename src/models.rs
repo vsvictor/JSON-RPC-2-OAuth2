@@ -224,16 +224,17 @@ pub trait JsonRpcAuthServer: Send + Sync {
 
     /// Issues a single-use reset token. Returns `None` for unknown e-mails so
     /// callers can answer identically and never reveal which accounts exist.
+    /// Returns `(email, reset_token, user_id)`.
     async fn handle_request_password_reset(
         &self,
         email: &str,
-    ) -> Result<Option<(String, String)>, AuthError> {
+    ) -> Result<Option<(String, String, String)>, AuthError> {
         let email = normalize_reset_email(email)?;
         let Some((user_id, hash)) = self.password_credentials_by_email(&email).await? else {
             return Ok(None);
         };
         let token = self.issue_reset_token(&user_id, &password_fingerprint(&hash))?;
-        Ok(Some((email, token)))
+        Ok(Some((email, token, user_id)))
     }
 
     async fn handle_confirm_password_reset(

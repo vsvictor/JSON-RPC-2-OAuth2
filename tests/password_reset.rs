@@ -158,6 +158,7 @@ fn notice_debug_redacts_token() {
     let notice = PasswordResetNotice {
         email: "a@b.c".into(),
         reset_token: "secret-token".into(),
+        user_id: "u1".into(),
     };
     assert!(!format!("{notice:?}").contains("secret-token"));
 }

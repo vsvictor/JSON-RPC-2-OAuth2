@@ -24,12 +24,14 @@ where
 pub struct PasswordResetNotice {
     pub email: String,
     pub reset_token: String,
+    pub user_id: String,
 }
 
 impl std::fmt::Debug for PasswordResetNotice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PasswordResetNotice")
             .field("email", &self.email)
+            .field("user_id", &self.user_id)
             .field("reset_token", &"<redacted>")
             .finish()
     }
@@ -52,12 +54,16 @@ where
         let notifier = notifier.clone();
         async move {
             let request: RequestPasswordResetParams = parse_params(params)?;
-            if let Some((email, reset_token)) = service
+            if let Some((email, reset_token, user_id)) = service
                 .handle_request_password_reset(&request.email)
                 .await
                 .map_err(AuthError::into_rpc_error)?
             {
-                notifier(PasswordResetNotice { email, reset_token });
+                notifier(PasswordResetNotice {
+                    email,
+                    reset_token,
+                    user_id,
+                });
             }
             Ok(serde_json::json!({ "accepted": true }))
         }

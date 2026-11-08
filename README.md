@@ -403,8 +403,9 @@ re-use state across browser sessions.
   `{"accepted": true}`, so account existence is never revealed. For a known
   account a single-use reset token (PASETO, valid 15 minutes) is passed to the
   notifier given to `register_auth_methods_with_reset_notifier`; the library
-  sends no e-mail and never logs the token. `register_auth_methods` uses a
-  no-op notifier.
+  sends no e-mail and never logs the token. `AuthPlugin::with_reset_notifier`
+  does the same for the plugin; `PasswordResetNotice` carries `email`,
+  `reset_token` and `user_id`. `register_auth_methods` uses a no-op notifier.
 - `auth.confirmPasswordReset`: accepts `reset_token` (alias `token`) and
   `new_password` (at least 8 characters). The token stops working once the
   password changes; invalid or used tokens return `-32001`. Both methods are

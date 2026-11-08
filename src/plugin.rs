@@ -15,6 +15,7 @@ pub struct AuthorizedRequest {
 #[derive(Clone)]
 pub struct AuthPlugin<S> {
     storage: S,
+    reset_notifier: Option<crate::PasswordResetNotifier>,
 }
 
 impl<S> AuthPlugin<S>
@@ -22,7 +23,16 @@ where
     S: JsonRpcAuthServer<StorageError = AuthError> + Clone + 'static,
 {
     pub fn new(storage: S) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            reset_notifier: None,
+        }
+    }
+
+    /// Delivers password-reset tokens to `notifier` (never logged by the library).
+    pub fn with_reset_notifier(mut self, notifier: crate::PasswordResetNotifier) -> Self {
+        self.reset_notifier = Some(notifier);
+        self
     }
 
     /// Registers an annotated handler without changing other methods' policies.
@@ -86,7 +96,14 @@ where
 
     async fn install(self, server: &RpcServer) -> anyhow::Result<PluginHandle> {
         self.storage.initialize_storage().await?;
-        register_auth_methods(self.storage, server)?;
+        match self.reset_notifier {
+            Some(notifier) => crate::register_auth_methods_with_reset_notifier(
+                self.storage,
+                server,
+                notifier,
+            )?,
+            None => register_auth_methods(self.storage, server)?,
+        }
         Ok(PluginHandle::new())
     }
 }

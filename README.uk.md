@@ -405,8 +405,10 @@ state та PKCE-дані із серверної сесії й не викори
   `{"accepted": true}`, тож наявність акаунта не розкривається. Для відомого
   акаунта одноразовий токен скидання (PASETO, дійсний 15 хвилин) передається
   notifier-у, наданому в `register_auth_methods_with_reset_notifier`; бібліотека
-  не надсилає e-mail і не логує токен. `register_auth_methods` використовує
-  порожній notifier.
+  не надсилає e-mail і не логує токен. `AuthPlugin::with_reset_notifier`
+  робить те саме для плагіна; `PasswordResetNotice` містить `email`,
+  `reset_token` і `user_id`. `register_auth_methods` використовує порожній
+  notifier.
 - `auth.confirmPasswordReset`: приймає `reset_token` (псевдонім `token`) і
   `new_password` (щонайменше 8 символів). Токен перестає діяти після зміни
   пароля; недійсні чи використані токени повертають `-32001`. Обидва методи не
