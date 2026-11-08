@@ -2039,7 +2039,7 @@ dependencies = [
 [[package]]
 name = "json-rpc-2-core"
 version = "0.1.0"
-source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=2c7ede5c8f2fb5d3c26cbd3b92678764a4d0f381#2c7ede5c8f2fb5d3c26cbd3b92678764a4d0f381"
+source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=e57a725556900decf3275fe8d54158fc077c631a#e57a725556900decf3275fe8d54158fc077c631a"
 dependencies = [
  "aes-gcm",
  "bytes",
@@ -2051,7 +2051,7 @@ dependencies = [
 [[package]]
 name = "json-rpc-2-macros"
 version = "0.1.0"
-source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=2c7ede5c8f2fb5d3c26cbd3b92678764a4d0f381#2c7ede5c8f2fb5d3c26cbd3b92678764a4d0f381"
+source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=e57a725556900decf3275fe8d54158fc077c631a#e57a725556900decf3275fe8d54158fc077c631a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2105,7 +2105,7 @@ dependencies = [
 [[package]]
 name = "json-rpc-2-server"
 version = "0.1.0"
-source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=2c7ede5c8f2fb5d3c26cbd3b92678764a4d0f381#2c7ede5c8f2fb5d3c26cbd3b92678764a4d0f381"
+source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=e57a725556900decf3275fe8d54158fc077c631a#e57a725556900decf3275fe8d54158fc077c631a"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2123,7 +2123,7 @@ dependencies = [
 [[package]]
 name = "json-rpc-2-transport"
 version = "0.1.0"
-source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=2c7ede5c8f2fb5d3c26cbd3b92678764a4d0f381#2c7ede5c8f2fb5d3c26cbd3b92678764a4d0f381"
+source = "git+https://github.com/vsvictor/JSON-RPC-2.git?rev=e57a725556900decf3275fe8d54158fc077c631a#e57a725556900decf3275fe8d54158fc077c631a"
 dependencies = [
  "bytes",
  "http-body",
