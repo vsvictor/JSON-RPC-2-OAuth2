@@ -1,4 +1,6 @@
 use crate::AuthError;
+#[cfg(feature = "auth-storage-core")]
+use crate::password::{fingerprint as password_fingerprint, hash_new_password};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -190,6 +192,66 @@ pub trait JsonRpcAuthServer: Send + Sync {
         req: RegisterRequest,
     ) -> Result<UserResponse, Self::StorageError>;
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError>;
+
+    /// Returns `(user_id, password_hash)` for a normalized e-mail address.
+    async fn password_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<(String, String)>, AuthError> {
+        let _ = email;
+        Err(unsupported_password_reset())
+    }
+    async fn password_hash_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
+        let _ = user_id;
+        Err(unsupported_password_reset())
+    }
+    async fn store_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+    ) -> Result<(), AuthError> {
+        let _ = (user_id, password_hash);
+        Err(unsupported_password_reset())
+    }
+    fn issue_reset_token(&self, user_id: &str, fingerprint: &str) -> Result<String, AuthError> {
+        let _ = (user_id, fingerprint);
+        Err(unsupported_password_reset())
+    }
+    fn verify_reset_token(&self, token: &str) -> Result<(String, String), AuthError> {
+        let _ = token;
+        Err(unsupported_password_reset())
+    }
+
+    /// Issues a single-use reset token. Returns `None` for unknown e-mails so
+    /// callers can answer identically and never reveal which accounts exist.
+    async fn handle_request_password_reset(
+        &self,
+        email: &str,
+    ) -> Result<Option<(String, String)>, AuthError> {
+        let email = normalize_reset_email(email)?;
+        let Some((user_id, hash)) = self.password_credentials_by_email(&email).await? else {
+            return Ok(None);
+        };
+        let token = self.issue_reset_token(&user_id, &password_fingerprint(&hash))?;
+        Ok(Some((email, token)))
+    }
+
+    async fn handle_confirm_password_reset(
+        &self,
+        reset_token: &str,
+        new_password: &str,
+    ) -> Result<(), AuthError> {
+        let (user_id, expected) = self.verify_reset_token(reset_token)?;
+        let current = self
+            .password_hash_for_user(&user_id)
+            .await?
+            .ok_or(AuthError::Unauthorized)?;
+        if password_fingerprint(&current) != expected {
+            return Err(AuthError::Unauthorized);
+        }
+        let new_hash = hash_new_password(new_password)?;
+        self.store_password_hash(&user_id, &new_hash).await
+    }
     async fn handle_external_login(
         &self,
         identity: ExternalIdentity,
@@ -312,4 +374,28 @@ mod tests {
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("not-for-logs"));
     }
+}
+
+#[cfg(not(feature = "auth-storage-core"))]
+fn password_fingerprint(_: &str) -> String {
+    String::new()
+}
+
+#[cfg(not(feature = "auth-storage-core"))]
+fn hash_new_password(_: &str) -> Result<String, AuthError> {
+    Err(unsupported_password_reset())
+}
+
+fn unsupported_password_reset() -> AuthError {
+    AuthError::InvalidConfiguration(
+        "this storage backend does not implement password reset".to_owned(),
+    )
+}
+
+fn normalize_reset_email(email: &str) -> Result<String, AuthError> {
+    let email = email.trim().to_ascii_lowercase();
+    if email.is_empty() || email.len() > 254 || email.matches('@').count() != 1 {
+        return Err(AuthError::InvalidParams("email is invalid".to_owned()));
+    }
+    Ok(email)
 }

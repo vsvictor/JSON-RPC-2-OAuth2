@@ -399,6 +399,16 @@ re-use state across browser sessions.
   `profile`.
 - `auth.login`: accepts `email`, `password`, and `grant_type: "password"`.
 - `auth.refresh`: accepts `refresh_token`.
+- `auth.requestPasswordReset`: accepts `email`. Always answers
+  `{"accepted": true}`, so account existence is never revealed. For a known
+  account a single-use reset token (PASETO, valid 15 minutes) is passed to the
+  notifier given to `register_auth_methods_with_reset_notifier`; the library
+  sends no e-mail and never logs the token. `register_auth_methods` uses a
+  no-op notifier.
+- `auth.confirmPasswordReset`: accepts `reset_token` (alias `token`) and
+  `new_password` (at least 8 characters). The token stops working once the
+  password changes; invalid or used tokens return `-32001`. Both methods are
+  unauthenticated and supported by every storage backend.
 - `auth.updateProfile`: accepts `profile` plus a bearer token.
 - `rbac.addRoleToUser` / `rbac.removeRoleFromUser`: require
   `rbac.users.write`.

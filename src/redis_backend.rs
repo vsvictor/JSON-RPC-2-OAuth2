@@ -115,6 +115,16 @@ impl RedisAuthServer {
             .clone()
     }
 
+    async fn stored_user(&self, user_id: &str) -> Result<Option<StoredUser>, AuthError> {
+        let json: Option<String> = redis::cmd("GET")
+            .arg(user_key(user_id))
+            .query_async(&mut self.connection()?)
+            .await
+            .map_err(redis_error)?;
+        json.map(|json| serde_json::from_str(&json).map_err(|_| AuthError::Unauthorized))
+            .transpose()
+    }
+
     fn connection(&self) -> Result<ConnectionManager, AuthError> {
         self.inner
             .connection
@@ -333,6 +343,55 @@ impl JsonRpcAuthServer for RedisAuthServer {
             return Err(AuthError::DuplicateEmail);
         }
         self.load_user(&user.id).await
+    }
+
+    async fn password_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<(String, String)>, AuthError> {
+        let user_id: Option<String> = redis::cmd("GET")
+            .arg(email_key(email))
+            .query_async(&mut self.connection()?)
+            .await
+            .map_err(redis_error)?;
+        let Some(user_id) = user_id else {
+            return Ok(None);
+        };
+        Ok(self
+            .stored_user(&user_id)
+            .await?
+            .map(|user| (user.id, user.password_hash)))
+    }
+
+    async fn password_hash_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
+        Ok(self.stored_user(user_id).await?.map(|user| user.password_hash))
+    }
+
+    async fn store_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+    ) -> Result<(), AuthError> {
+        let mut user = self
+            .stored_user(user_id)
+            .await?
+            .ok_or(AuthError::Unauthorized)?;
+        user.password_hash = password_hash.to_owned();
+        redis::cmd("SET")
+            .arg(user_key(user_id))
+            .arg(serde_json::to_string(&user)?)
+            .query_async::<()>(&mut self.connection()?)
+            .await
+            .map_err(redis_error)?;
+        Ok(())
+    }
+
+    fn issue_reset_token(&self, user_id: &str, fingerprint: &str) -> Result<String, AuthError> {
+        self.inner.tokens.issue_reset_token(user_id, fingerprint)
+    }
+
+    fn verify_reset_token(&self, token: &str) -> Result<(String, String), AuthError> {
+        self.inner.tokens.verify_reset_token(token)
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {

@@ -127,6 +127,20 @@ impl CassandraAuthServer {
             .clone()
     }
 
+    async fn email_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
+        let table = self.qualified_table("users_by_id")?;
+        let rows = select_rows(
+            &self.session()?,
+            &format!("SELECT email FROM {table} WHERE user_id = ?"),
+            (user_id,),
+        )
+        .await?;
+        Ok(rows
+            .maybe_first_row::<(String,)>()
+            .map_err(cassandra_error)?
+            .map(|(email,)| email))
+    }
+
     fn session(&self) -> Result<Arc<Session>, AuthError> {
         self.inner
             .session
@@ -443,6 +457,59 @@ impl JsonRpcAuthServer for CassandraAuthServer {
             return Err(error);
         }
         self.load_user(&user_id).await
+    }
+
+    async fn password_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<(String, String)>, AuthError> {
+        let table = self.qualified_table("users_by_email")?;
+        let rows = select_rows(
+            &self.session()?,
+            &format!("SELECT user_id, password_hash FROM {table} WHERE email = ?"),
+            (email,),
+        )
+        .await?;
+        rows.maybe_first_row::<(String, String)>()
+            .map_err(cassandra_error)
+    }
+
+    async fn password_hash_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
+        let Some(email) = self.email_for_user(user_id).await? else {
+            return Ok(None);
+        };
+        Ok(self
+            .password_credentials_by_email(&email)
+            .await?
+            .map(|(_, hash)| hash))
+    }
+
+    async fn store_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+    ) -> Result<(), AuthError> {
+        let email = self
+            .email_for_user(user_id)
+            .await?
+            .ok_or(AuthError::Unauthorized)?;
+        let table = self.qualified_table("users_by_email")?;
+        self.session()?
+            .query_unpaged(
+                format!("UPDATE {table} SET password_hash = ? WHERE email = ?"),
+                (password_hash, email.as_str()),
+            )
+            .await
+            .map_err(cassandra_error)?;
+        Ok(())
+    }
+
+    fn issue_reset_token(&self, user_id: &str, fingerprint: &str) -> Result<String, AuthError> {
+        self.inner.tokens.issue_reset_token(user_id, fingerprint)
+    }
+
+    fn verify_reset_token(&self, token: &str) -> Result<(String, String), AuthError> {
+        self.inner.tokens.verify_reset_token(token)
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {

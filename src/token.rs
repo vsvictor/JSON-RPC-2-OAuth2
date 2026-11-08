@@ -16,6 +16,9 @@ use std::time::Duration;
 #[cfg(feature = "auth-storage-core")]
 use std::{convert::TryFrom, sync::Arc};
 
+#[cfg(feature = "auth-storage-core")]
+const RESET_TOKEN_MINUTES: i64 = 15;
+
 #[derive(Clone, Debug)]
 pub struct TokenConfig {
     pub issuer: String,
@@ -138,6 +141,42 @@ impl TokenService {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
             .ok_or(AuthError::Unauthorized)
+    }
+
+    pub(crate) fn issue_reset_token(
+        &self,
+        subject: &str,
+        password_fingerprint: &str,
+    ) -> Result<String, AuthError> {
+        let expires = chrono::Utc::now() + chrono::Duration::minutes(RESET_TOKEN_MINUTES);
+        let mut claims = Claims::new().map_err(token_error)?;
+        claims.issuer(&self.config.issuer).map_err(token_error)?;
+        claims.subject(subject).map_err(token_error)?;
+        claims
+            .expiration(&expires.to_rfc3339())
+            .map_err(token_error)?;
+        claims
+            .add_additional("token_use", "reset")
+            .map_err(token_error)?;
+        claims
+            .add_additional("pwd", password_fingerprint)
+            .map_err(token_error)?;
+        local::encrypt(&self.key, &claims, None, None).map_err(token_error)
+    }
+
+    pub(crate) fn verify_reset_token(&self, token: &str) -> Result<(String, String), AuthError> {
+        let claims = self.decrypt(token)?;
+        let string_claim = |name: &str| {
+            claims
+                .get_claim(name)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or(AuthError::Unauthorized)
+        };
+        if string_claim("token_use")? != "reset" {
+            return Err(AuthError::Unauthorized);
+        }
+        Ok((string_claim("sub")?, string_claim("pwd")?))
     }
 
     pub(crate) fn refresh_pair(

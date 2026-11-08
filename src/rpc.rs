@@ -4,7 +4,7 @@ use crate::{
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 /// Register the common authentication, profile and RBAC procedures on a
 /// JSON-RPC-2 server for any storage implementing [`JsonRpcAuthServer`].
@@ -15,6 +15,67 @@ pub fn register_auth_methods<S>(
 where
     S: JsonRpcAuthServer<StorageError = AuthError> + Clone + 'static,
 {
+    register_auth_methods_with_reset_notifier(storage, server, Arc::new(|_| {}))
+}
+
+/// Delivery hook for password-reset tokens. The server never sends e-mail and
+/// never logs the token; the application delivers it however it chooses.
+#[derive(Clone)]
+pub struct PasswordResetNotice {
+    pub email: String,
+    pub reset_token: String,
+}
+
+impl std::fmt::Debug for PasswordResetNotice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasswordResetNotice")
+            .field("email", &self.email)
+            .field("reset_token", &"<redacted>")
+            .finish()
+    }
+}
+
+pub type PasswordResetNotifier = Arc<dyn Fn(PasswordResetNotice) + Send + Sync>;
+
+/// Like [`register_auth_methods`], delivering reset tokens to `notifier`.
+pub fn register_auth_methods_with_reset_notifier<S>(
+    storage: S,
+    server: &json_rpc_2_server::RpcServer,
+    notifier: PasswordResetNotifier,
+) -> Result<(), json_rpc_2_server::RegistrationError>
+where
+    S: JsonRpcAuthServer<StorageError = AuthError> + Clone + 'static,
+{
+    let service = storage.clone();
+    server.register("auth.requestPasswordReset", move |params| {
+        let service = service.clone();
+        let notifier = notifier.clone();
+        async move {
+            let request: RequestPasswordResetParams = parse_params(params)?;
+            if let Some((email, reset_token)) = service
+                .handle_request_password_reset(&request.email)
+                .await
+                .map_err(AuthError::into_rpc_error)?
+            {
+                notifier(PasswordResetNotice { email, reset_token });
+            }
+            Ok(serde_json::json!({ "accepted": true }))
+        }
+    })?;
+
+    let service = storage.clone();
+    server.register("auth.confirmPasswordReset", move |params| {
+        let service = service.clone();
+        async move {
+            let request: ConfirmPasswordResetParams = parse_params(params)?;
+            service
+                .handle_confirm_password_reset(&request.reset_token, &request.new_password)
+                .await
+                .map_err(AuthError::into_rpc_error)?;
+            Ok(serde_json::json!({ "reset": true }))
+        }
+    })?;
+
     register_profile_reader(storage.clone(), server)?;
     let service = storage.clone();
     server.register("auth.register", move |params| {
@@ -231,4 +292,18 @@ struct PermissionParams {
     auth: AuthenticatedParams,
     role_name: String,
     permission_name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestPasswordResetParams {
+    email: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfirmPasswordResetParams {
+    #[serde(alias = "token")]
+    reset_token: String,
+    new_password: String,
 }

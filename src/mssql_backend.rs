@@ -395,6 +395,59 @@ impl JsonRpcAuthServer for MssqlAuthServer {
         self.load_user(&id).await
     }
 
+    async fn password_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<(String, String)>, AuthError> {
+        let client = self.client()?;
+        let mut client = client.lock().await;
+        let rows = query(
+            &mut client,
+            "SELECT id, password_hash FROM users WHERE email = @P1",
+            &[&email],
+        )
+        .await?;
+        rows.first()
+            .map(|row| Ok((row_string(row, 0)?, row_string(row, 1)?)))
+            .transpose()
+    }
+
+    async fn password_hash_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
+        let client = self.client()?;
+        let mut client = client.lock().await;
+        let rows = query(
+            &mut client,
+            "SELECT password_hash FROM users WHERE id = @P1",
+            &[&user_id],
+        )
+        .await?;
+        rows.first().map(|row| row_string(row, 0)).transpose()
+    }
+
+    async fn store_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+    ) -> Result<(), AuthError> {
+        let client = self.client()?;
+        let mut client = client.lock().await;
+        execute(
+            &mut client,
+            "UPDATE users SET password_hash = @P1 WHERE id = @P2",
+            &[&password_hash, &user_id],
+        )
+        .await?;
+        Ok(())
+    }
+
+    fn issue_reset_token(&self, user_id: &str, fingerprint: &str) -> Result<String, AuthError> {
+        self.inner.tokens.issue_reset_token(user_id, fingerprint)
+    }
+
+    fn verify_reset_token(&self, token: &str) -> Result<(String, String), AuthError> {
+        self.inner.tokens.verify_reset_token(token)
+    }
+
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(

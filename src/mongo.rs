@@ -494,6 +494,59 @@ impl JsonRpcAuthServer for MongoAuthServer {
         self.user_response(response).await
     }
 
+    async fn password_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<(String, String)>, AuthError> {
+        let user = users(self.database()?)
+            .find_one(doc! { "email": email })
+            .await?;
+        user.map(|user| {
+            let id = user
+                .get_object_id("_id")
+                .map_err(|_| {
+                    AuthError::InvalidConfiguration("stored user has no valid ObjectId".to_owned())
+                })?
+                .to_hex();
+            let hash = user.get_str("password_hash").map_err(|_| {
+                AuthError::InvalidConfiguration("stored user has no password hash".to_owned())
+            })?;
+            Ok((id, hash.to_owned()))
+        })
+        .transpose()
+    }
+
+    async fn password_hash_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
+        let Ok(id) = parse_object_id(user_id) else {
+            return Ok(None);
+        };
+        let user = users(self.database()?).find_one(doc! { "_id": id }).await?;
+        Ok(user.and_then(|user| user.get_str("password_hash").ok().map(str::to_owned)))
+    }
+
+    async fn store_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+    ) -> Result<(), AuthError> {
+        let id = parse_object_id(user_id)?;
+        users(self.database()?)
+            .update_one(
+                doc! { "_id": id },
+                doc! { "$set": { "password_hash": password_hash } },
+            )
+            .await?;
+        Ok(())
+    }
+
+    fn issue_reset_token(&self, user_id: &str, fingerprint: &str) -> Result<String, AuthError> {
+        self.inner.tokens.issue_reset_token(user_id, fingerprint)
+    }
+
+    fn verify_reset_token(&self, token: &str) -> Result<(String, String), AuthError> {
+        self.inner.tokens.verify_reset_token(token)
+    }
+
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(

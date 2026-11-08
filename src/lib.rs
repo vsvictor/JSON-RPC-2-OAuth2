@@ -20,6 +20,8 @@ mod mssql_backend;
 mod oauth2_providers;
 #[cfg(feature = "oracle")]
 mod oracle_backend;
+#[cfg(feature = "auth-storage-core")]
+mod password;
 mod plugin;
 #[cfg(feature = "mongodb")]
 mod profile;
@@ -63,7 +65,7 @@ pub use oracle_backend::OracleAuthServer;
 pub use plugin::{AuthPlugin, AuthorizedRequest};
 #[cfg(feature = "redis")]
 pub use redis_backend::RedisAuthServer;
-pub use rpc::register_auth_methods;
+pub use rpc::{PasswordResetNotice, PasswordResetNotifier, register_auth_methods, register_auth_methods_with_reset_notifier};
 #[cfg(feature = "cassandra")]
 pub use scylla_backend::CassandraAuthServer;
 #[cfg(feature = "sqlite")]

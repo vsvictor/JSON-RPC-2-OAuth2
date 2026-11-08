@@ -366,6 +366,48 @@ impl JsonRpcAuthServer for SqliteAuthServer {
         self.load_user(&id).await
     }
 
+    async fn password_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<(String, String)>, AuthError> {
+        let row = sqlx::query("SELECT id, password_hash FROM users WHERE email = ?")
+            .bind(email)
+            .fetch_optional(self.pool()?)
+            .await?;
+        row.map(|row| Ok((row.try_get("id")?, row.try_get("password_hash")?)))
+            .transpose()
+    }
+
+    async fn password_hash_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
+        Ok(
+            sqlx::query_scalar::<_, String>("SELECT password_hash FROM users WHERE id = ?")
+                .bind(user_id)
+                .fetch_optional(self.pool()?)
+                .await?,
+        )
+    }
+
+    async fn store_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+    ) -> Result<(), AuthError> {
+        sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+            .bind(password_hash)
+            .bind(user_id)
+            .execute(self.pool()?)
+            .await?;
+        Ok(())
+    }
+
+    fn issue_reset_token(&self, user_id: &str, fingerprint: &str) -> Result<String, AuthError> {
+        self.inner.tokens.issue_reset_token(user_id, fingerprint)
+    }
+
+    fn verify_reset_token(&self, token: &str) -> Result<(String, String), AuthError> {
+        self.inner.tokens.verify_reset_token(token)
+    }
+
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(

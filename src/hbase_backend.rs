@@ -435,6 +435,53 @@ impl JsonRpcAuthServer for HbaseAuthServer {
         self.load_user(&user_id).await
     }
 
+    async fn password_credentials_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<(String, String)>, AuthError> {
+        let index = self
+            .read_fields(self.tables()?.emails, email.as_bytes().to_vec())
+            .await?;
+        let Some(id) = index.get("auth:id") else {
+            return Ok(None);
+        };
+        let id = decode(id)?;
+        Ok(self
+            .password_hash_for_user(&id)
+            .await?
+            .map(|hash| (id, hash)))
+    }
+
+    async fn password_hash_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
+        let fields = self.get_user_row(user_id).await?;
+        fields
+            .get("auth:password_hash")
+            .map(|hash| decode(hash))
+            .transpose()
+    }
+
+    async fn store_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+    ) -> Result<(), AuthError> {
+        let table = self.tables()?.users;
+        let row = user_id.as_bytes().to_vec();
+        let value = password_hash.as_bytes().to_vec();
+        self.call(move |client| {
+            put_fields(client, table, row, vec![("auth:password_hash", value)])
+        })
+        .await
+    }
+
+    fn issue_reset_token(&self, user_id: &str, fingerprint: &str) -> Result<String, AuthError> {
+        self.inner.tokens.issue_reset_token(user_id, fingerprint)
+    }
+
+    fn verify_reset_token(&self, token: &str) -> Result<(String, String), AuthError> {
+        self.inner.tokens.verify_reset_token(token)
+    }
+
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(

@@ -36,7 +36,7 @@ all-oauth-providers = [
     "oauth-okta",
 ]
 oauth2 = ["all-oauth-providers"]
-auth-storage-core = []
+auth-storage-core = ["dep:sha2"]
 mongodb = ["auth-storage-core", "dep:mongodb"]
 sqlite = [
     "auth-storage-core",
@@ -114,6 +114,11 @@ resolver = "2"
 [dev-dependencies]
 testcontainers-modules = { version = "0.15", features = ["mongo", "mssql_server", "mysql", "oracle", "postgres", "redis", "scylladb"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "password_reset"
+path = "tests/password_reset.rs"
+required-features = ["sqlite"]
 
 [[test]]
 name = "plugin"
