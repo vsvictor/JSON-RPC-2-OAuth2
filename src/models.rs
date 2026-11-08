@@ -221,20 +221,57 @@ pub trait JsonRpcAuthServer: Send + Sync {
         let _ = token;
         Err(unsupported_password_reset())
     }
+    fn reset_code(
+        &self,
+        user_id: &str,
+        fingerprint: &str,
+        window: i64,
+    ) -> Result<String, AuthError> {
+        let _ = (user_id, fingerprint, window);
+        Err(unsupported_password_reset())
+    }
 
     /// Issues a single-use reset token. Returns `None` for unknown e-mails so
     /// callers can answer identically and never reveal which accounts exist.
-    /// Returns `(email, reset_token, user_id)`.
+    /// Returns `(email, reset_token, user_id, reset_code)`.
     async fn handle_request_password_reset(
         &self,
         email: &str,
-    ) -> Result<Option<(String, String, String)>, AuthError> {
+    ) -> Result<Option<(String, String, String, String)>, AuthError> {
         let email = normalize_reset_email(email)?;
         let Some((user_id, hash)) = self.password_credentials_by_email(&email).await? else {
             return Ok(None);
         };
-        let token = self.issue_reset_token(&user_id, &password_fingerprint(&hash))?;
-        Ok(Some((email, token, user_id)))
+        let fingerprint = password_fingerprint(&hash);
+        let token = self.issue_reset_token(&user_id, &fingerprint)?;
+        let code = self.reset_code(&user_id, &fingerprint, reset_code_window(0))?;
+        Ok(Some((email, token, user_id, code)))
+    }
+
+    /// Confirms a reset with the six-digit code e-mailed to `email`. The code
+    /// is valid for 10 to 15 minutes and for a single password change.
+    async fn handle_confirm_password_reset_with_code(
+        &self,
+        email: &str,
+        code: &str,
+        new_password: &str,
+    ) -> Result<(), AuthError> {
+        let email = normalize_reset_email(email)?;
+        let (user_id, hash) = self
+            .password_credentials_by_email(&email)
+            .await?
+            .ok_or(AuthError::Unauthorized)?;
+        let fingerprint = password_fingerprint(&hash);
+        let mut matched = false;
+        for back in 0..RESET_CODE_WINDOWS {
+            let expected = self.reset_code(&user_id, &fingerprint, reset_code_window(back))?;
+            matched |= constant_time_eq(expected.as_bytes(), code.trim().as_bytes());
+        }
+        if !matched {
+            return Err(AuthError::Unauthorized);
+        }
+        let new_hash = hash_new_password(new_password)?;
+        self.store_password_hash(&user_id, &new_hash).await
     }
 
     async fn handle_confirm_password_reset(
@@ -391,6 +428,17 @@ fn unsupported_password_reset() -> AuthError {
     AuthError::InvalidConfiguration(
         "this storage backend does not implement password reset".to_owned(),
     )
+}
+
+const RESET_CODE_WINDOW_SECS: i64 = 300;
+const RESET_CODE_WINDOWS: i64 = 3;
+
+fn reset_code_window(back: i64) -> i64 {
+    chrono::Utc::now().timestamp() / RESET_CODE_WINDOW_SECS - back
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn normalize_reset_email(email: &str) -> Result<String, AuthError> {

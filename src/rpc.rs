@@ -24,6 +24,8 @@ where
 pub struct PasswordResetNotice {
     pub email: String,
     pub reset_token: String,
+    /// Six-digit code for `auth.confirmPasswordReset` with `email` + `code`.
+    pub reset_code: String,
     pub user_id: String,
 }
 
@@ -33,6 +35,7 @@ impl std::fmt::Debug for PasswordResetNotice {
             .field("email", &self.email)
             .field("user_id", &self.user_id)
             .field("reset_token", &"<redacted>")
+            .field("reset_code", &"<redacted>")
             .finish()
     }
 }
@@ -54,7 +57,7 @@ where
         let notifier = notifier.clone();
         async move {
             let request: RequestPasswordResetParams = parse_params(params)?;
-            if let Some((email, reset_token, user_id)) = service
+            if let Some((email, reset_token, user_id, reset_code)) = service
                 .handle_request_password_reset(&request.email)
                 .await
                 .map_err(AuthError::into_rpc_error)?
@@ -62,6 +65,7 @@ where
                 notifier(PasswordResetNotice {
                     email,
                     reset_token,
+                    reset_code,
                     user_id,
                 });
             }
@@ -70,14 +74,35 @@ where
     })?;
 
     let service = storage.clone();
+    let attempts = Arc::new(CodeAttempts::default());
     server.register("auth.confirmPasswordReset", move |params| {
         let service = service.clone();
+        let attempts = attempts.clone();
         async move {
             let request: ConfirmPasswordResetParams = parse_params(params)?;
-            service
-                .handle_confirm_password_reset(&request.reset_token, &request.new_password)
-                .await
-                .map_err(AuthError::into_rpc_error)?;
+            match (request.reset_token, request.email, request.code) {
+                (Some(token), None, None) => service
+                    .handle_confirm_password_reset(&token, &request.new_password)
+                    .await
+                    .map_err(AuthError::into_rpc_error)?,
+                (None, Some(email), Some(code)) => {
+                    let key = email.trim().to_lowercase();
+                    if !attempts.allow(&key) {
+                        return Err(AuthError::Unauthorized.into_rpc_error());
+                    }
+                    service
+                        .handle_confirm_password_reset_with_code(&email, &code, &request.new_password)
+                        .await
+                        .map_err(AuthError::into_rpc_error)?;
+                    attempts.clear(&key);
+                }
+                _ => {
+                    return Err(AuthError::InvalidParams(
+                        "provide either reset_token, or email and code".to_owned(),
+                    )
+                    .into_rpc_error());
+                }
+            }
             Ok(serde_json::json!({ "reset": true }))
         }
     })?;
@@ -310,6 +335,33 @@ struct RequestPasswordResetParams {
 #[serde(deny_unknown_fields)]
 struct ConfirmPasswordResetParams {
     #[serde(alias = "token")]
-    reset_token: String,
+    reset_token: Option<String>,
+    email: Option<String>,
+    code: Option<String>,
     new_password: String,
+}
+
+const CODE_ATTEMPT_LIMIT: u32 = 5;
+const CODE_ATTEMPT_WINDOW: std::time::Duration = std::time::Duration::from_secs(900);
+
+/// Per-e-mail failed-attempt limiter for six-digit codes (per process).
+#[derive(Default)]
+struct CodeAttempts {
+    entries: std::sync::Mutex<std::collections::HashMap<String, (u32, std::time::Instant)>>,
+}
+
+impl CodeAttempts {
+    /// Counts an attempt; `false` once the limit is hit within the window.
+    fn allow(&self, key: &str) -> bool {
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        entries.retain(|_, (_, since)| now.duration_since(*since) < CODE_ATTEMPT_WINDOW);
+        let entry = entries.entry(key.to_owned()).or_insert((0, now));
+        entry.0 += 1;
+        entry.0 <= CODE_ATTEMPT_LIMIT
+    }
+
+    fn clear(&self, key: &str) {
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+    }
 }

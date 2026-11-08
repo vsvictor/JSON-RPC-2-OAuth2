@@ -407,6 +407,14 @@ impl JsonRpcAuthServer for SqliteAuthServer {
     fn verify_reset_token(&self, token: &str) -> Result<(String, String), AuthError> {
         self.inner.tokens.verify_reset_token(token)
     }
+    fn reset_code(
+        &self,
+        user_id: &str,
+        fingerprint: &str,
+        window: i64,
+    ) -> Result<String, AuthError> {
+        Ok(self.inner.tokens.reset_code(user_id, fingerprint, window))
+    }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
         if req.grant_type != "password" {

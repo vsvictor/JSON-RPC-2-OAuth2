@@ -158,7 +158,81 @@ fn notice_debug_redacts_token() {
     let notice = PasswordResetNotice {
         email: "a@b.c".into(),
         reset_token: "secret-token".into(),
+        reset_code: "424242".into(),
         user_id: "u1".into(),
     };
-    assert!(!format!("{notice:?}").contains("secret-token"));
+    let debug = format!("{notice:?}");
+    assert!(!debug.contains("secret-token"));
+    assert!(!debug.contains("424242"));
+}
+
+#[tokio::test]
+async fn six_digit_code_resets_password_once_and_limits_guessing() {
+    let (auth, rpc, inbox) = setup().await;
+    call(
+        &rpc,
+        "auth.requestPasswordReset",
+        json!({"email": "user@example.test"}),
+    )
+    .await;
+    let code = inbox.lock().unwrap()[0].reset_code.clone();
+    assert_eq!(code.len(), 6);
+    assert!(code.chars().all(|c| c.is_ascii_digit()));
+
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    let bad = call(
+        &rpc,
+        "auth.confirmPasswordReset",
+        json!({"email": "user@example.test", "code": wrong, "new_password": "new-password-2"}),
+    )
+    .await;
+    assert_eq!(bad["error"]["code"], -32001);
+    assert!(login(&auth, "old-password-1").await);
+
+    let done = call(
+        &rpc,
+        "auth.confirmPasswordReset",
+        json!({"email": " User@Example.test ", "code": code, "new_password": "new-password-2"}),
+    )
+    .await;
+    assert_eq!(done["result"]["reset"], true);
+    assert!(login(&auth, "new-password-2").await);
+
+    let replay = call(
+        &rpc,
+        "auth.confirmPasswordReset",
+        json!({"email": "user@example.test", "code": code, "new_password": "third-password-3"}),
+    )
+    .await;
+    assert_eq!(replay["error"]["code"], -32001);
+    assert!(login(&auth, "new-password-2").await);
+}
+
+#[tokio::test]
+async fn code_guessing_is_rate_limited_per_email() {
+    let (auth, rpc, inbox) = setup().await;
+    call(
+        &rpc,
+        "auth.requestPasswordReset",
+        json!({"email": "user@example.test"}),
+    )
+    .await;
+    let code = inbox.lock().unwrap()[0].reset_code.clone();
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    for _ in 0..5 {
+        call(
+            &rpc,
+            "auth.confirmPasswordReset",
+            json!({"email": "user@example.test", "code": wrong, "new_password": "new-password-2"}),
+        )
+        .await;
+    }
+    let blocked = call(
+        &rpc,
+        "auth.confirmPasswordReset",
+        json!({"email": "user@example.test", "code": code, "new_password": "new-password-2"}),
+    )
+    .await;
+    assert_eq!(blocked["error"]["code"], -32001);
+    assert!(login(&auth, "old-password-1").await);
 }

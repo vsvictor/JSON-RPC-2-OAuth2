@@ -179,6 +179,35 @@ impl TokenService {
         Ok((string_claim("sub")?, string_claim("pwd")?))
     }
 
+    /// Six-digit reset code for a time window: HMAC-SHA256 over the user and
+    /// the current password fingerprint, keyed by the token key. It is
+    /// stateless, so every backend instance derives the same code, and it
+    /// dies with the password change.
+    pub(crate) fn reset_code(&self, user_id: &str, fingerprint: &str, window: i64) -> String {
+        use sha2::{Digest, Sha256};
+        let mut key = [0u8; 64];
+        let secret = self.key.as_bytes();
+        if secret.len() > 64 {
+            key[..32].copy_from_slice(&Sha256::digest(secret));
+        } else {
+            key[..secret.len()].copy_from_slice(secret);
+        }
+        let mut inner = Sha256::new();
+        inner.update(key.map(|byte| byte ^ 0x36));
+        inner.update(b"reset-code\0");
+        inner.update(user_id.as_bytes());
+        inner.update([0]);
+        inner.update(fingerprint.as_bytes());
+        inner.update([0]);
+        inner.update(window.to_be_bytes());
+        let mut outer = Sha256::new();
+        outer.update(key.map(|byte| byte ^ 0x5c));
+        outer.update(inner.finalize());
+        let digest = outer.finalize();
+        let value = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
+        format!("{:06}", value % 1_000_000)
+    }
+
     pub(crate) fn refresh_pair(
         &self,
         token: &str,
