@@ -97,11 +97,9 @@ where
     async fn install(self, server: &RpcServer) -> anyhow::Result<PluginHandle> {
         self.storage.initialize_storage().await?;
         match self.reset_notifier {
-            Some(notifier) => crate::register_auth_methods_with_reset_notifier(
-                self.storage,
-                server,
-                notifier,
-            )?,
+            Some(notifier) => {
+                crate::register_auth_methods_with_reset_notifier(self.storage, server, notifier)?
+            }
             None => register_auth_methods(self.storage, server)?,
         }
         Ok(PluginHandle::new())

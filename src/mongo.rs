@@ -1,7 +1,6 @@
 use crate::{
     AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
-    LoginRequest,
-    ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
+    LoginRequest, ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     profile::{parse_profile, profile_to_json},
     token::TokenService,
 };
@@ -122,7 +121,9 @@ impl MongoAuthServer {
         server.register("auth.register", move |params| {
             let service = service.clone();
             async move {
-                let request = parse_params(params)?;
+                let mut request: RegisterRequest = parse_params(params)?;
+                crate::registration::validate_registration(&mut request)
+                    .map_err(AuthError::into_rpc_error)?;
                 let user = service
                     .handle_register(request)
                     .await
@@ -262,7 +263,9 @@ impl MongoAuthServer {
             &subject,
             &roles,
             &permissions,
-            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+            session
+                .as_ref()
+                .map(|(sid, device)| (sid.as_str(), device.as_str())),
         )
     }
 
@@ -338,11 +341,13 @@ impl MongoAuthServer {
     }
 
     fn schema(&self) -> HashMap<String, ProfileFieldType> {
-        self.inner
-            .profile_schema
-            .read()
-            .expect("schema lock poisoned")
-            .clone()
+        crate::registration::with_registration_fields(
+            self.inner
+                .profile_schema
+                .read()
+                .expect("schema lock poisoned")
+                .clone(),
+        )
     }
 
     async fn user_response(&self, user: Document) -> Result<UserResponse, AuthError> {

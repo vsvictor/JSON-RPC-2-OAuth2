@@ -1,7 +1,6 @@
 use crate::{
     AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
-    LoginRequest,
-    ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
+    LoginRequest, ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
 use argon2::{
@@ -121,11 +120,13 @@ impl CassandraAuthServer {
     }
 
     fn schema(&self) -> HashMap<String, ProfileFieldType> {
-        self.inner
-            .profile_schema
-            .read()
-            .expect("schema lock poisoned")
-            .clone()
+        crate::registration::with_registration_fields(
+            self.inner
+                .profile_schema
+                .read()
+                .expect("schema lock poisoned")
+                .clone(),
+        )
     }
 
     async fn email_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
@@ -402,7 +403,9 @@ impl JsonRpcAuthServer for CassandraAuthServer {
             &user_id,
             &roles,
             &permissions,
-            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+            session
+                .as_ref()
+                .map(|(sid, device)| (sid.as_str(), device.as_str())),
         )
     }
 

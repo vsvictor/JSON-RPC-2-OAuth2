@@ -91,7 +91,11 @@ where
                         return Err(AuthError::Unauthorized.into_rpc_error());
                     }
                     service
-                        .handle_confirm_password_reset_with_code(&email, &code, &request.new_password)
+                        .handle_confirm_password_reset_with_code(
+                            &email,
+                            &code,
+                            &request.new_password,
+                        )
                         .await
                         .map_err(AuthError::into_rpc_error)?;
                     attempts.clear(&key);
@@ -112,7 +116,9 @@ where
     server.register("auth.register", move |params| {
         let service = service.clone();
         async move {
-            let request: RegisterRequest = parse_params(params)?;
+            let mut request: RegisterRequest = parse_params(params)?;
+            crate::registration::validate_registration(&mut request)
+                .map_err(AuthError::into_rpc_error)?;
             let user: UserResponse = service
                 .handle_register(request)
                 .await
@@ -377,6 +383,9 @@ impl CodeAttempts {
     }
 
     fn clear(&self, key: &str) {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(key);
     }
 }

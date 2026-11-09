@@ -35,7 +35,11 @@ fn with_os(name: &str, version: &str) -> DeviceInfo {
 
 #[test]
 fn accepts_valid_os() {
-    for (name, version) in [("Android", "15"), ("iOS", "18.2.1"), ("Android", "14 (API 34)")] {
+    for (name, version) in [
+        ("Android", "15"),
+        ("iOS", "18.2.1"),
+        ("Android", "14 (API 34)"),
+    ] {
         let device = with_os(name, version);
         assert!(device.validate().is_ok(), "{name} {version}");
         assert_eq!(device.os_name(), Some(name));
@@ -45,7 +49,15 @@ fn accepts_valid_os() {
 
 #[test]
 fn rejects_invalid_os() {
-    for (name, version) in [("", "15"), ("Android", ""), ("And$roid", "15"), ("iOS", "1;2")] {
-        assert!(with_os(name, version).validate().is_err(), "{name} {version}");
+    for (name, version) in [
+        ("", "15"),
+        ("Android", ""),
+        ("And$roid", "15"),
+        ("iOS", "1;2"),
+    ] {
+        assert!(
+            with_os(name, version).validate().is_err(),
+            "{name} {version}"
+        );
     }
 }

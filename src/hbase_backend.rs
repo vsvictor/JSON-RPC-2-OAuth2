@@ -1,7 +1,6 @@
 use crate::{
     AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
-    LoginRequest,
-    ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
+    LoginRequest, ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
 use argon2::{
@@ -108,11 +107,13 @@ impl HbaseAuthServer {
     }
 
     fn schema(&self) -> HashMap<String, ProfileFieldType> {
-        self.inner
-            .profile_schema
-            .read()
-            .expect("schema lock poisoned")
-            .clone()
+        crate::registration::with_registration_fields(
+            self.inner
+                .profile_schema
+                .read()
+                .expect("schema lock poisoned")
+                .clone(),
+        )
     }
 
     fn tables(&self) -> Result<Tables, AuthError> {
@@ -352,7 +353,10 @@ impl JsonRpcAuthServer for HbaseAuthServer {
             let table = self.tables()?.sessions;
             let row = session_row(&subject, device_id);
             let fields = self.read_fields(table.clone(), row.clone()).await?;
-            let current = fields.get("auth:sid").map(|value| decode(value)).transpose()?;
+            let current = fields
+                .get("auth:sid")
+                .map(|value| decode(value))
+                .transpose()?;
             if current.as_deref() != Some(sid.as_str()) {
                 return Err(AuthError::Unauthorized);
             }
@@ -366,7 +370,9 @@ impl JsonRpcAuthServer for HbaseAuthServer {
             &subject,
             &roles,
             &permissions,
-            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+            session
+                .as_ref()
+                .map(|(sid, device)| (sid.as_str(), device.as_str())),
         )
     }
 
@@ -487,10 +493,8 @@ impl JsonRpcAuthServer for HbaseAuthServer {
         let table = self.tables()?.users;
         let row = user_id.as_bytes().to_vec();
         let value = password_hash.as_bytes().to_vec();
-        self.call(move |client| {
-            put_fields(client, table, row, vec![("auth:password_hash", value)])
-        })
-        .await
+        self.call(move |client| put_fields(client, table, row, vec![("auth:password_hash", value)]))
+            .await
     }
 
     fn issue_reset_token(&self, user_id: &str, fingerprint: &str) -> Result<String, AuthError> {
@@ -572,9 +576,12 @@ impl JsonRpcAuthServer for HbaseAuthServer {
         ];
         self.call(move |client| put_fields(client, table, row, fields))
             .await?;
-        self.inner
-            .tokens
-            .issue_session_pair(&id, &roles, &permissions, Some((&sid, &device.device_id)))
+        self.inner.tokens.issue_session_pair(
+            &id,
+            &roles,
+            &permissions,
+            Some((&sid, &device.device_id)),
+        )
     }
 
     async fn handle_external_login(

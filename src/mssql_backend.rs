@@ -1,7 +1,6 @@
 use crate::{
     AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
-    LoginRequest,
-    ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
+    LoginRequest, ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
 use argon2::{
@@ -122,11 +121,13 @@ impl MssqlAuthServer {
     }
 
     fn schema(&self) -> HashMap<String, ProfileFieldType> {
-        self.inner
-            .profile_schema
-            .read()
-            .expect("schema lock poisoned")
-            .clone()
+        crate::registration::with_registration_fields(
+            self.inner
+                .profile_schema
+                .read()
+                .expect("schema lock poisoned")
+                .clone(),
+        )
     }
 
     fn client(&self) -> Result<Arc<Mutex<Client<Compat<TcpStream>>>>, AuthError> {
@@ -368,7 +369,9 @@ impl JsonRpcAuthServer for MssqlAuthServer {
             &subject,
             &roles,
             &permissions,
-            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+            session
+                .as_ref()
+                .map(|(sid, device)| (sid.as_str(), device.as_str())),
         )
     }
 
@@ -535,9 +538,12 @@ impl JsonRpcAuthServer for MssqlAuthServer {
                 .await?;
             }
         }
-        self.inner
-            .tokens
-            .issue_session_pair(&id, &roles, &permissions, Some((&sid, &device.device_id)))
+        self.inner.tokens.issue_session_pair(
+            &id,
+            &roles,
+            &permissions,
+            Some((&sid, &device.device_id)),
+        )
     }
 
     async fn handle_external_login(

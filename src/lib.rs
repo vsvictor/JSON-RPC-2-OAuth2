@@ -36,6 +36,7 @@ mod profile;
 mod profile_values;
 #[cfg(feature = "redis")]
 mod redis_backend;
+mod registration;
 mod rpc;
 #[cfg(feature = "cassandra")]
 mod scylla_backend;
@@ -53,9 +54,8 @@ pub use json_rpc_2_oauth2_macros::authorize;
 pub use json_rpc_2_server::{RpcError, RpcServer, ServerPlugin};
 pub use models::{
     DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer, LoginRequest, OAuth2Provider,
-    OsInfo, ProfileFieldType,
-    ProviderAuthorization, ProviderAuthorizationRequest, ProviderCallbackRequest, RegisterRequest,
-    TokenResponse, UserResponse,
+    OsInfo, ProfileFieldType, ProviderAuthorization, ProviderAuthorizationRequest,
+    ProviderCallbackRequest, RegisterRequest, TokenResponse, UserResponse,
 };
 #[cfg(feature = "mongodb")]
 pub use mongo::MongoAuthServer;
@@ -66,7 +66,10 @@ pub use oracle_backend::OracleAuthServer;
 pub use plugin::{AuthPlugin, AuthorizedRequest};
 #[cfg(feature = "redis")]
 pub use redis_backend::RedisAuthServer;
-pub use rpc::{PasswordResetNotice, PasswordResetNotifier, register_auth_methods, register_auth_methods_with_reset_notifier};
+pub use rpc::{
+    PasswordResetNotice, PasswordResetNotifier, register_auth_methods,
+    register_auth_methods_with_reset_notifier,
+};
 #[cfg(feature = "cassandra")]
 pub use scylla_backend::CassandraAuthServer;
 #[cfg(feature = "sqlite")]

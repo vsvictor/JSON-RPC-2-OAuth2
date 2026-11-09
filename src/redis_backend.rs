@@ -1,7 +1,6 @@
 use crate::{
     AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
-    LoginRequest,
-    ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
+    LoginRequest, ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
 use argon2::{
@@ -109,11 +108,13 @@ impl RedisAuthServer {
     }
 
     fn schema(&self) -> HashMap<String, ProfileFieldType> {
-        self.inner
-            .profile_schema
-            .read()
-            .expect("schema lock poisoned")
-            .clone()
+        crate::registration::with_registration_fields(
+            self.inner
+                .profile_schema
+                .read()
+                .expect("schema lock poisoned")
+                .clone(),
+        )
     }
 
     async fn stored_user(&self, user_id: &str) -> Result<Option<StoredUser>, AuthError> {
@@ -315,7 +316,9 @@ impl JsonRpcAuthServer for RedisAuthServer {
             &subject,
             &roles,
             &permissions,
-            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+            session
+                .as_ref()
+                .map(|(sid, device)| (sid.as_str(), device.as_str())),
         )
     }
 
@@ -385,7 +388,10 @@ impl JsonRpcAuthServer for RedisAuthServer {
     }
 
     async fn password_hash_for_user(&self, user_id: &str) -> Result<Option<String>, AuthError> {
-        Ok(self.stored_user(user_id).await?.map(|user| user.password_hash))
+        Ok(self
+            .stored_user(user_id)
+            .await?
+            .map(|user| user.password_hash))
     }
 
     async fn store_password_hash(

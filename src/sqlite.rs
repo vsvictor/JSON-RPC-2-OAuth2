@@ -1,7 +1,7 @@
 use crate::{
     AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer, LoginRequest,
-    ProfileFieldType,
-    RegisterRequest, TokenConfig, TokenResponse, UserResponse, token::TokenService,
+    ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
+    token::TokenService,
 };
 use argon2::{
     Argon2,
@@ -93,11 +93,13 @@ impl SqliteAuthServer {
     }
 
     fn schema(&self) -> HashMap<String, ProfileFieldType> {
-        self.inner
-            .profile_schema
-            .read()
-            .expect("schema lock poisoned")
-            .clone()
+        crate::registration::with_registration_fields(
+            self.inner
+                .profile_schema
+                .read()
+                .expect("schema lock poisoned")
+                .clone(),
+        )
     }
 
     fn pool(&self) -> Result<&SqlitePool, AuthError> {
@@ -357,7 +359,9 @@ impl JsonRpcAuthServer for SqliteAuthServer {
             &subject,
             &roles,
             &permissions,
-            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+            session
+                .as_ref()
+                .map(|(sid, device)| (sid.as_str(), device.as_str())),
         )
     }
 
@@ -507,9 +511,12 @@ impl JsonRpcAuthServer for SqliteAuthServer {
         .bind(&now)
         .execute(self.pool()?)
         .await?;
-        self.inner
-            .tokens
-            .issue_session_pair(&id, &roles, &permissions, Some((&sid, &device.device_id)))
+        self.inner.tokens.issue_session_pair(
+            &id,
+            &roles,
+            &permissions,
+            Some((&sid, &device.device_id)),
+        )
     }
 
     async fn handle_external_login(

@@ -141,7 +141,8 @@ impl TokenService {
     }
 
     pub(crate) fn verify_refresh_token(&self, token: &str) -> Result<String, AuthError> {
-        self.verify_refresh_session(token).map(|(subject, _)| subject)
+        self.verify_refresh_session(token)
+            .map(|(subject, _)| subject)
     }
 
     /// Returns the subject and, for device sessions, `(session id, device id)`.
@@ -289,13 +290,12 @@ impl TokenService {
     }
 
     fn decrypt(&self, token: &str) -> Result<pasetors::claims::Claims, AuthError> {
-        let untrusted = UntrustedToken::<Local, V4>::try_from(token)
-            .map_err(|_| AuthError::Unauthorized)?;
+        let untrusted =
+            UntrustedToken::<Local, V4>::try_from(token).map_err(|_| AuthError::Unauthorized)?;
         let mut validation = ClaimsValidationRules::new();
         validation.validate_issuer_with(&self.config.issuer);
-        let trusted =
-            local::decrypt(&self.key, &untrusted, &validation, None, None)
-                .map_err(|_| AuthError::Unauthorized)?;
+        let trusted = local::decrypt(&self.key, &untrusted, &validation, None, None)
+            .map_err(|_| AuthError::Unauthorized)?;
         trusted
             .payload_claims()
             .cloned()

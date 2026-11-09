@@ -66,7 +66,12 @@ async fn each_device_has_its_own_session() {
         .await
         .unwrap();
     assert!(server.handle_refresh(&phone.refresh_token).await.is_err());
-    assert!(server.handle_refresh(&phone_next.refresh_token).await.is_err());
+    assert!(
+        server
+            .handle_refresh(&phone_next.refresh_token)
+            .await
+            .is_err()
+    );
     server.handle_refresh(&tablet.refresh_token).await.unwrap();
 
     let legacy = server.handle_login(login_request()).await.unwrap();

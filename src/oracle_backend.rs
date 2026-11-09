@@ -1,7 +1,6 @@
 use crate::{
     AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
-    LoginRequest,
-    ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
+    LoginRequest, ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
 use argon2::{
@@ -99,11 +98,13 @@ impl OracleAuthServer {
     }
 
     fn schema(&self) -> HashMap<String, ProfileFieldType> {
-        self.inner
-            .profile_schema
-            .read()
-            .expect("schema lock poisoned")
-            .clone()
+        crate::registration::with_registration_fields(
+            self.inner
+                .profile_schema
+                .read()
+                .expect("schema lock poisoned")
+                .clone(),
+        )
     }
 
     fn connection(&self) -> Result<Arc<Mutex<Connection>>, AuthError> {
@@ -352,7 +353,9 @@ impl JsonRpcAuthServer for OracleAuthServer {
             &subject,
             &roles,
             &permissions,
-            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+            session
+                .as_ref()
+                .map(|(sid, device)| (sid.as_str(), device.as_str())),
         )
     }
 
@@ -442,7 +445,11 @@ impl JsonRpcAuthServer for OracleAuthServer {
             )
             .await
             .map_err(oracle_error)?;
-        result.rows.first().map(|row| row_string(row, 0)).transpose()
+        result
+            .rows
+            .first()
+            .map(|row| row_string(row, 0))
+            .transpose()
     }
 
     async fn store_password_hash(
@@ -559,9 +566,12 @@ impl JsonRpcAuthServer for OracleAuthServer {
             }
             connection.commit().await.map_err(oracle_error)?;
         }
-        self.inner
-            .tokens
-            .issue_session_pair(&id, &roles, &permissions, Some((&sid, &device.device_id)))
+        self.inner.tokens.issue_session_pair(
+            &id,
+            &roles,
+            &permissions,
+            Some((&sid, &device.device_id)),
+        )
     }
 
     async fn handle_external_login(
