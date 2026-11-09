@@ -1,5 +1,6 @@
 use crate::{
-    AccessTokenClaims, AuthError, DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest,
+    AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
+    LoginRequest,
     ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
@@ -127,6 +128,7 @@ impl HbaseAuthServer {
             user_roles: format!("auth_{name}_user_roles").into_bytes(),
             role_permissions: format!("auth_{name}_role_permissions").into_bytes(),
             external_identities: format!("auth_{name}_external_identities").into_bytes(),
+            sessions: format!("auth_{name}_sessions").into_bytes(),
         })
     }
 
@@ -238,6 +240,7 @@ struct Tables {
     user_roles: Vec<u8>,
     role_permissions: Vec<u8>,
     external_identities: Vec<u8>,
+    sessions: Vec<u8>,
 }
 
 #[async_trait]
@@ -303,6 +306,7 @@ impl JsonRpcAuthServer for HbaseAuthServer {
                 tables.user_roles,
                 tables.role_permissions,
                 tables.external_identities,
+                tables.sessions,
             ] {
                 if !existing.contains(&table) {
                     client.create_table(
@@ -342,13 +346,28 @@ impl JsonRpcAuthServer for HbaseAuthServer {
         &self,
         refresh_token: &str,
     ) -> Result<TokenResponse, Self::StorageError> {
-        let subject = self.inner.tokens.verify_refresh_token(refresh_token)?;
+        let (subject, session) = self.inner.tokens.verify_refresh_session(refresh_token)?;
         self.load_user(&subject).await?;
+        if let Some((sid, device_id)) = &session {
+            let table = self.tables()?.sessions;
+            let row = session_row(&subject, device_id);
+            let fields = self.read_fields(table.clone(), row.clone()).await?;
+            let current = fields.get("auth:sid").map(|value| decode(value)).transpose()?;
+            if current.as_deref() != Some(sid.as_str()) {
+                return Err(AuthError::Unauthorized);
+            }
+            let now = chrono::Utc::now().to_rfc3339().into_bytes();
+            self.call(move |client| put_fields(client, table, row, vec![("auth:last_seen", now)]))
+                .await?;
+        }
         let roles = self.roles_for_user(&subject).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner
-            .tokens
-            .refresh_pair(refresh_token, &roles, &permissions)
+        self.inner.tokens.refresh_session_pair(
+            &subject,
+            &roles,
+            &permissions,
+            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+        )
     }
 
     async fn handle_register(
@@ -491,6 +510,17 @@ impl JsonRpcAuthServer for HbaseAuthServer {
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
+        self.handle_login_with_device(req, None).await
+    }
+
+    async fn handle_login_with_device(
+        &self,
+        req: LoginRequest,
+        device: Option<DeviceInfo>,
+    ) -> Result<TokenResponse, Self::StorageError> {
+        if let Some(device) = &device {
+            device.validate()?;
+        }
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(
                 "grant_type must be `password`".to_owned(),
@@ -514,7 +544,37 @@ impl JsonRpcAuthServer for HbaseAuthServer {
             .map_err(|_| AuthError::Unauthorized)?;
         let roles = self.roles_for_user(&id).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner.tokens.issue_pair(&id, &roles, &permissions)
+        let Some(device) = device else {
+            return self.inner.tokens.issue_pair(&id, &roles, &permissions);
+        };
+        let sid = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let table = self.tables()?.sessions;
+        let row = session_row(&id, &device.device_id);
+        let previous = self.read_fields(table.clone(), row.clone()).await?;
+        let created_at = previous
+            .get("auth:created_at")
+            .map(|value| decode(value))
+            .transpose()?
+            .unwrap_or_else(|| now.clone());
+        let fields = vec![
+            ("auth:sid", sid.clone().into_bytes()),
+            (
+                "auth:os_name",
+                device.os_name().unwrap_or("").as_bytes().to_vec(),
+            ),
+            (
+                "auth:os_version",
+                device.os_version().unwrap_or("").as_bytes().to_vec(),
+            ),
+            ("auth:created_at", created_at.into_bytes()),
+            ("auth:last_seen", now.into_bytes()),
+        ];
+        self.call(move |client| put_fields(client, table, row, fields))
+            .await?;
+        self.inner
+            .tokens
+            .issue_session_pair(&id, &roles, &permissions, Some((&sid, &device.device_id)))
     }
 
     async fn handle_external_login(
@@ -814,6 +874,10 @@ fn decode(value: &[u8]) -> Result<String, AuthError> {
 
 fn external_identity_row(provider: &str, subject: &str) -> Vec<u8> {
     format!("{provider}:{subject}").into_bytes()
+}
+
+fn session_row(user_id: &str, device_id: &str) -> Vec<u8> {
+    format!("{user_id}:{device_id}").into_bytes()
 }
 
 fn normalize_email(email: &str) -> Result<String, AuthError> {

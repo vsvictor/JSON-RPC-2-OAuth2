@@ -1,5 +1,6 @@
 use crate::{
-    AccessTokenClaims, AuthError, DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest,
+    AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
+    LoginRequest,
     ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
@@ -311,6 +312,7 @@ impl JsonRpcAuthServer for MssqlAuthServer {
             "IF OBJECT_ID(N'dbo.role_permissions', N'U') IS NULL CREATE TABLE dbo.role_permissions (role_name NVARCHAR(128) NOT NULL REFERENCES dbo.roles(name) ON DELETE CASCADE, permission_name NVARCHAR(128) NOT NULL, CONSTRAINT PK_auth_role_permissions PRIMARY KEY (role_name, permission_name))",
             "IF OBJECT_ID(N'dbo.user_profiles', N'U') IS NULL CREATE TABLE dbo.user_profiles (user_id NVARCHAR(36) NOT NULL PRIMARY KEY REFERENCES dbo.users(id) ON DELETE CASCADE, profile_json NVARCHAR(MAX) NOT NULL)",
             "IF OBJECT_ID(N'dbo.external_identities', N'U') IS NULL CREATE TABLE dbo.external_identities (provider NVARCHAR(64) NOT NULL, subject NVARCHAR(512) NOT NULL, user_id NVARCHAR(36) NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE, CONSTRAINT PK_auth_external_identities PRIMARY KEY (provider, subject))",
+            "IF OBJECT_ID(N'dbo.sessions', N'U') IS NULL CREATE TABLE dbo.sessions (user_id NVARCHAR(36) NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE, device_id NVARCHAR(128) NOT NULL, sid NVARCHAR(64) NOT NULL, os_name NVARCHAR(32) NULL, os_version NVARCHAR(64) NULL, created_at NVARCHAR(40) NOT NULL, last_seen NVARCHAR(40) NOT NULL, CONSTRAINT PK_auth_sessions PRIMARY KEY (user_id, device_id))",
         ] {
             execute(&mut client, statement, &[]).await?;
         }
@@ -334,7 +336,8 @@ impl JsonRpcAuthServer for MssqlAuthServer {
         &self,
         refresh_token: &str,
     ) -> Result<TokenResponse, Self::StorageError> {
-        let subject = self.inner.tokens.verify_refresh_token(refresh_token)?;
+        let subject = self.inner.tokens.verify_refresh_session(refresh_token)?;
+        let (subject, session) = subject;
         let client = self.client()?;
         let mut client = client.lock().await;
         let rows = query(
@@ -346,12 +349,27 @@ impl JsonRpcAuthServer for MssqlAuthServer {
         if rows.is_empty() {
             return Err(AuthError::Unauthorized);
         }
+        if let Some((sid, device_id)) = &session {
+            let now = chrono::Utc::now().to_rfc3339();
+            let touched = execute(
+                &mut client,
+                "UPDATE dbo.sessions SET last_seen = @P1 WHERE user_id = @P2 AND device_id = @P3 AND sid = @P4",
+                &[&now, &subject, device_id, sid],
+            )
+            .await?;
+            if touched == 0 {
+                return Err(AuthError::Unauthorized);
+            }
+        }
         drop(client);
         let roles = self.roles_for_user(&subject).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner
-            .tokens
-            .refresh_pair(refresh_token, &roles, &permissions)
+        self.inner.tokens.refresh_session_pair(
+            &subject,
+            &roles,
+            &permissions,
+            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+        )
     }
 
     async fn handle_register(
@@ -457,6 +475,17 @@ impl JsonRpcAuthServer for MssqlAuthServer {
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
+        self.handle_login_with_device(req, None).await
+    }
+
+    async fn handle_login_with_device(
+        &self,
+        req: LoginRequest,
+        device: Option<DeviceInfo>,
+    ) -> Result<TokenResponse, Self::StorageError> {
+        if let Some(device) = &device {
+            device.validate()?;
+        }
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(
                 "grant_type must be `password`".to_owned(),
@@ -481,7 +510,34 @@ impl JsonRpcAuthServer for MssqlAuthServer {
         drop(client);
         let roles = self.roles_for_user(&id).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner.tokens.issue_pair(&id, &roles, &permissions)
+        let Some(device) = device else {
+            return self.inner.tokens.issue_pair(&id, &roles, &permissions);
+        };
+        let sid = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let os_name = device.os_name().unwrap_or("");
+        let os_version = device.os_version().unwrap_or("");
+        {
+            let client = self.client()?;
+            let mut client = client.lock().await;
+            let updated = execute(
+                &mut client,
+                "UPDATE dbo.sessions SET sid = @P1, os_name = @P2, os_version = @P3, last_seen = @P4 WHERE user_id = @P5 AND device_id = @P6",
+                &[&sid, os_name, os_version, &now, &id, &device.device_id],
+            )
+            .await?;
+            if updated == 0 {
+                execute(
+                    &mut client,
+                    "INSERT INTO dbo.sessions (user_id, device_id, sid, os_name, os_version, created_at, last_seen) VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7)",
+                    &[&id, &device.device_id, &sid, os_name, os_version, &now, &now],
+                )
+                .await?;
+            }
+        }
+        self.inner
+            .tokens
+            .issue_session_pair(&id, &roles, &permissions, Some((&sid, &device.device_id)))
     }
 
     async fn handle_external_login(

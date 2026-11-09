@@ -125,9 +125,10 @@ where
     server.register("auth.login", move |params| {
         let service = service.clone();
         async move {
-            let request: LoginRequest = parse_params(params)?;
+            let request: LoginRequest = parse_params(params.clone())?;
+            let device = parse_device(&params)?;
             let tokens: TokenResponse = service
-                .handle_login(request)
+                .handle_login_with_device(request, device)
                 .await
                 .map_err(AuthError::into_rpc_error)?;
             to_value(tokens)
@@ -258,6 +259,20 @@ where
         .require_permission(&token, permission)
         .map(|_| ())
         .map_err(AuthError::into_rpc_error)
+}
+
+pub(crate) fn parse_device(
+    params: &Value,
+) -> Result<Option<crate::DeviceInfo>, json_rpc_2_server::RpcError> {
+    match params.get("device") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let device: crate::DeviceInfo = serde_json::from_value(value.clone())
+                .map_err(|_| json_rpc_2_server::RpcError::invalid_params())?;
+            device.validate().map_err(AuthError::into_rpc_error)?;
+            Ok(Some(device))
+        }
+    }
 }
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, json_rpc_2_server::RpcError> {

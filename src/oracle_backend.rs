@@ -1,5 +1,6 @@
 use crate::{
-    AccessTokenClaims, AuthError, DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest,
+    AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
+    LoginRequest,
     ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
@@ -282,6 +283,7 @@ impl JsonRpcAuthServer for OracleAuthServer {
                 "BEGIN EXECUTE IMMEDIATE 'CREATE TABLE role_permissions (role_name VARCHAR2(128) NOT NULL REFERENCES roles(name) ON DELETE CASCADE, permission_name VARCHAR2(128) NOT NULL, PRIMARY KEY (role_name, permission_name))'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF; END;",
                 "BEGIN EXECUTE IMMEDIATE 'CREATE TABLE user_profiles (user_id VARCHAR2(36) PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE, profile_json CLOB NOT NULL)'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF; END;",
                 "BEGIN EXECUTE IMMEDIATE 'CREATE TABLE external_identities (provider VARCHAR2(64) NOT NULL, subject VARCHAR2(512) NOT NULL, user_id VARCHAR2(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE, CONSTRAINT PK_AUTH_EXTERNAL_IDS PRIMARY KEY (provider, subject))'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF; END;",
+                "BEGIN EXECUTE IMMEDIATE 'CREATE TABLE sessions (user_id VARCHAR2(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE, device_id VARCHAR2(128) NOT NULL, sid VARCHAR2(64) NOT NULL, os_name VARCHAR2(32), os_version VARCHAR2(64), created_at VARCHAR2(40) NOT NULL, last_seen VARCHAR2(40) NOT NULL, CONSTRAINT PK_AUTH_SESSIONS PRIMARY KEY (user_id, device_id))'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF; END;",
             ] {
                 connection
                     .execute_dml_sql(statement, &[])
@@ -310,7 +312,8 @@ impl JsonRpcAuthServer for OracleAuthServer {
         &self,
         refresh_token: &str,
     ) -> Result<TokenResponse, Self::StorageError> {
-        let subject = self.inner.tokens.verify_refresh_token(refresh_token)?;
+        let subject = self.inner.tokens.verify_refresh_session(refresh_token)?;
+        let (subject, session) = subject;
         let connection = self.connection()?;
         let connection = connection.lock().await;
         let result = connection
@@ -323,12 +326,34 @@ impl JsonRpcAuthServer for OracleAuthServer {
         if result.rows.is_empty() {
             return Err(AuthError::Unauthorized);
         }
+        if let Some((sid, device_id)) = &session {
+            let now = chrono::Utc::now().to_rfc3339();
+            let touched = connection
+                .execute_dml_sql(
+                    "UPDATE sessions SET last_seen = :1 WHERE user_id = :2 AND device_id = :3 AND sid = :4",
+                    &[
+                        now.as_str().into(),
+                        subject.as_str().into(),
+                        device_id.as_str().into(),
+                        sid.as_str().into(),
+                    ],
+                )
+                .await
+                .map_err(oracle_error)?;
+            connection.commit().await.map_err(oracle_error)?;
+            if touched == 0 {
+                return Err(AuthError::Unauthorized);
+            }
+        }
         drop(connection);
         let roles = self.roles_for_user(&subject).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner
-            .tokens
-            .refresh_pair(refresh_token, &roles, &permissions)
+        self.inner.tokens.refresh_session_pair(
+            &subject,
+            &roles,
+            &permissions,
+            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+        )
     }
 
     async fn handle_register(
@@ -455,6 +480,17 @@ impl JsonRpcAuthServer for OracleAuthServer {
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
+        self.handle_login_with_device(req, None).await
+    }
+
+    async fn handle_login_with_device(
+        &self,
+        req: LoginRequest,
+        device: Option<DeviceInfo>,
+    ) -> Result<TokenResponse, Self::StorageError> {
+        if let Some(device) = &device {
+            device.validate()?;
+        }
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(
                 "grant_type must be `password`".to_owned(),
@@ -480,7 +516,52 @@ impl JsonRpcAuthServer for OracleAuthServer {
         drop(connection);
         let roles = self.roles_for_user(&id).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner.tokens.issue_pair(&id, &roles, &permissions)
+        let Some(device) = device else {
+            return self.inner.tokens.issue_pair(&id, &roles, &permissions);
+        };
+        let sid = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let os_name = device.os_name().unwrap_or("");
+        let os_version = device.os_version().unwrap_or("");
+        {
+            let connection = self.connection()?;
+            let connection = connection.lock().await;
+            let updated = connection
+                .execute_dml_sql(
+                    "UPDATE sessions SET sid = :1, os_name = :2, os_version = :3, last_seen = :4 WHERE user_id = :5 AND device_id = :6",
+                    &[
+                        sid.as_str().into(),
+                        os_name.into(),
+                        os_version.into(),
+                        now.as_str().into(),
+                        id.as_str().into(),
+                        device.device_id.as_str().into(),
+                    ],
+                )
+                .await
+                .map_err(oracle_error)?;
+            if updated == 0 {
+                connection
+                    .execute_dml_sql(
+                        "INSERT INTO sessions (user_id, device_id, sid, os_name, os_version, created_at, last_seen) VALUES (:1, :2, :3, :4, :5, :6, :7)",
+                        &[
+                            id.as_str().into(),
+                            device.device_id.as_str().into(),
+                            sid.as_str().into(),
+                            os_name.into(),
+                            os_version.into(),
+                            now.as_str().into(),
+                            now.as_str().into(),
+                        ],
+                    )
+                    .await
+                    .map_err(oracle_error)?;
+            }
+            connection.commit().await.map_err(oracle_error)?;
+        }
+        self.inner
+            .tokens
+            .issue_session_pair(&id, &roles, &permissions, Some((&sid, &device.device_id)))
     }
 
     async fn handle_external_login(

@@ -141,6 +141,11 @@ path = "tests/mongodb.rs"
 required-features = ["mongodb"]
 
 [[test]]
+name = "mongodb_device_sessions"
+path = "tests/mongodb_device_sessions.rs"
+required-features = ["mongodb"]
+
+[[test]]
 name = "mssql_backend"
 path = "tests/mssql_backend.rs"
 required-features = ["mssql"]

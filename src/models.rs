@@ -136,6 +136,77 @@ pub struct LoginRequest {
     pub grant_type: String,
 }
 
+/// Client device that opens a session. Every `(user, device)` pair is its own
+/// session, so signing in to one account from two devices yields two sessions.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct DeviceInfo {
+    #[serde(rename = "deviceId", alias = "device_id")]
+    pub device_id: String,
+    /// Operating system of the device, e.g. `{ "name": "iOS", "version": "18.2" }`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<OsInfo>,
+}
+
+/// Operating system name (`Android`, `iOS`, ...) and version of a device.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct OsInfo {
+    pub name: String,
+    pub version: String,
+}
+
+impl OsInfo {
+    fn validate(&self) -> Result<(), AuthError> {
+        let name_ok = (1..=32).contains(&self.name.len())
+            && self
+                .name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-'));
+        let version_ok = (1..=64).contains(&self.version.len())
+            && self.version.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-' | '+' | '(' | ')')
+            });
+        if name_ok && version_ok {
+            Ok(())
+        } else {
+            Err(AuthError::InvalidParams(
+                "device.os.name (1-32) and device.os.version (1-64) contain unsupported characters"
+                    .to_owned(),
+            ))
+        }
+    }
+}
+
+impl DeviceInfo {
+    const MAX_ID_LEN: usize = 128;
+
+    /// Accepts 1..=128 characters from `[A-Za-z0-9._:-]` and a valid optional `os`.
+    pub fn validate(&self) -> Result<(), AuthError> {
+        let id = &self.device_id;
+        let valid = !id.is_empty()
+            && id.len() <= Self::MAX_ID_LEN
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'));
+        if !valid {
+            return Err(AuthError::InvalidParams(
+                "device.deviceId must be 1-128 characters of [A-Za-z0-9._:-]".to_owned(),
+            ));
+        }
+        match &self.os {
+            Some(os) => os.validate(),
+            None => Ok(()),
+        }
+    }
+
+    pub fn os_name(&self) -> Option<&str> {
+        self.os.as_ref().map(|os| os.name.as_str())
+    }
+
+    pub fn os_version(&self) -> Option<&str> {
+        self.os.as_ref().map(|os| os.version.as_str())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UserResponse {
     pub id: String,
@@ -192,6 +263,17 @@ pub trait JsonRpcAuthServer: Send + Sync {
         req: RegisterRequest,
     ) -> Result<UserResponse, Self::StorageError>;
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError>;
+
+    /// Login that also records the signing-in device as a separate session.
+    /// Backends without session storage ignore the device.
+    async fn handle_login_with_device(
+        &self,
+        req: LoginRequest,
+        device: Option<DeviceInfo>,
+    ) -> Result<TokenResponse, Self::StorageError> {
+        let _ = device;
+        self.handle_login(req).await
+    }
 
     /// Returns `(user_id, password_hash)` for a normalized e-mail address.
     async fn password_credentials_by_email(

@@ -76,12 +76,24 @@ impl TokenService {
         roles: &[String],
         permissions: &[String],
     ) -> Result<TokenResponse, AuthError> {
+        self.issue_session_pair(subject, roles, permissions, None)
+    }
+
+    /// Like [`Self::issue_pair`], binding both tokens to a device session.
+    pub(crate) fn issue_session_pair(
+        &self,
+        subject: &str,
+        roles: &[String],
+        permissions: &[String],
+        session: Option<(&str, &str)>,
+    ) -> Result<TokenResponse, AuthError> {
         let access_token = self.issue(
             subject,
             roles,
             permissions,
             "access",
             self.config.access_token_lifetime,
+            session,
         )?;
         let refresh_token = self.issue(
             subject,
@@ -89,6 +101,7 @@ impl TokenService {
             permissions,
             "refresh",
             self.config.refresh_token_lifetime,
+            session,
         )?;
         Ok(TokenResponse {
             access_token,
@@ -128,19 +141,30 @@ impl TokenService {
     }
 
     pub(crate) fn verify_refresh_token(&self, token: &str) -> Result<String, AuthError> {
+        self.verify_refresh_session(token).map(|(subject, _)| subject)
+    }
+
+    /// Returns the subject and, for device sessions, `(session id, device id)`.
+    pub(crate) fn verify_refresh_session(
+        &self,
+        token: &str,
+    ) -> Result<(String, Option<(String, String)>), AuthError> {
         let claims = self.decrypt(token)?;
-        let token_use = claims
-            .get_claim("token_use")
-            .and_then(serde_json::Value::as_str)
-            .ok_or(AuthError::Unauthorized)?;
-        if token_use != "refresh" {
+        let string_claim = |name: &str| {
+            claims
+                .get_claim(name)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        if string_claim("token_use").as_deref() != Some("refresh") {
             return Err(AuthError::Unauthorized);
         }
-        claims
-            .get_claim("sub")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-            .ok_or(AuthError::Unauthorized)
+        let subject = string_claim("sub").ok_or(AuthError::Unauthorized)?;
+        let session = match (string_claim("sid"), string_claim("device_id")) {
+            (Some(sid), Some(device)) => Some((sid, device)),
+            _ => None,
+        };
+        Ok((subject, session))
     }
 
     pub(crate) fn issue_reset_token(
@@ -218,6 +242,17 @@ impl TokenService {
         self.issue_pair(&subject, roles, permissions)
     }
 
+    /// Re-issues a pair for an already verified device session.
+    pub(crate) fn refresh_session_pair(
+        &self,
+        subject: &str,
+        roles: &[String],
+        permissions: &[String],
+        session: Option<(&str, &str)>,
+    ) -> Result<TokenResponse, AuthError> {
+        self.issue_session_pair(subject, roles, permissions, session)
+    }
+
     fn issue(
         &self,
         subject: &str,
@@ -225,6 +260,7 @@ impl TokenService {
         permissions: &[String],
         token_use: &str,
         lifetime: Duration,
+        session: Option<(&str, &str)>,
     ) -> Result<String, AuthError> {
         let expires = chrono::Utc::now()
             + chrono::Duration::from_std(lifetime).map_err(|error| {
@@ -243,6 +279,12 @@ impl TokenService {
         claims
             .add_additional("token_use", token_use)
             .map_err(token_error)?;
+        if let Some((sid, device_id)) = session {
+            claims.add_additional("sid", sid).map_err(token_error)?;
+            claims
+                .add_additional("device_id", device_id)
+                .map_err(token_error)?;
+        }
         local::encrypt(&self.key, &claims, None, None).map_err(token_error)
     }
 

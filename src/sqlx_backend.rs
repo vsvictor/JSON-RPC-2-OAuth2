@@ -1,6 +1,7 @@
 use crate::profile_values::parse_profile;
 use crate::{
-    AccessTokenClaims, AuthError, DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest,
+    AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
+    LoginRequest,
     ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
@@ -149,6 +150,75 @@ impl SqlxAuthServer {
             .pool
             .get()
             .ok_or(AuthError::StorageNotInitialized)
+    }
+
+    /// Creates or replaces the one session of `(user, device)`; returns its id.
+    async fn open_session(&self, user_id: &str, device: &DeviceInfo) -> Result<String, AuthError> {
+        let sid = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        for _ in 0..2 {
+            let updated = with_sql!(
+                self,
+                "UPDATE sessions SET sid = ?, os_name = ?, os_version = ?, last_seen = ? WHERE user_id = ? AND device_id = ?",
+                sqlx::query,
+                query => query
+                    .bind(&sid)
+                    .bind(device.os_name())
+                    .bind(device.os_version())
+                    .bind(&now)
+                    .bind(user_id)
+                    .bind(&device.device_id)
+                    .execute(self.pool()?)
+            )?;
+            if updated.rows_affected() > 0 {
+                return Ok(sid);
+            }
+            let inserted = with_sql!(
+                self,
+                "INSERT INTO sessions (user_id, device_id, sid, os_name, os_version, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                sqlx::query,
+                query => query
+                    .bind(user_id)
+                    .bind(&device.device_id)
+                    .bind(&sid)
+                    .bind(device.os_name())
+                    .bind(device.os_version())
+                    .bind(&now)
+                    .bind(&now)
+                    .execute(self.pool()?)
+            );
+            match inserted {
+                Ok(_) => return Ok(sid),
+                Err(error) if is_unique_violation(&error) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(AuthError::Unauthorized)
+    }
+
+    /// Requires the session to still be the current one for its device.
+    async fn touch_session(
+        &self,
+        user_id: &str,
+        sid: &str,
+        device_id: &str,
+    ) -> Result<(), AuthError> {
+        let now = Utc::now().to_rfc3339();
+        let updated = with_sql!(
+            self,
+            "UPDATE sessions SET last_seen = ? WHERE user_id = ? AND device_id = ? AND sid = ?",
+            sqlx::query,
+            query => query
+                .bind(now)
+                .bind(user_id)
+                .bind(device_id)
+                .bind(sid)
+                .execute(self.pool()?)
+        )?;
+        if updated.rows_affected() == 0 {
+            return Err(AuthError::Unauthorized);
+        }
+        Ok(())
     }
 
     fn duplicate_insert_prefix(&self) -> &'static str {
@@ -332,6 +402,7 @@ impl JsonRpcAuthServer for SqlxAuthServer {
             "CREATE TABLE IF NOT EXISTS role_permissions (role_name VARCHAR(128) NOT NULL REFERENCES roles(name) ON DELETE CASCADE, permission_name VARCHAR(128) NOT NULL, PRIMARY KEY (role_name, permission_name))",
             "CREATE TABLE IF NOT EXISTS user_profiles (user_id VARCHAR(36) PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE, profile_json VARCHAR(16000) NOT NULL)",
             "CREATE TABLE IF NOT EXISTS external_identities (provider VARCHAR(64) NOT NULL, subject VARCHAR(512) NOT NULL, user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY (provider, subject))",
+            "CREATE TABLE IF NOT EXISTS sessions (user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE, device_id VARCHAR(128) NOT NULL, sid VARCHAR(64) NOT NULL, os_name VARCHAR(32), os_version VARCHAR(64), created_at VARCHAR(40) NOT NULL, last_seen VARCHAR(40) NOT NULL, PRIMARY KEY (user_id, device_id))",
         ] {
             sqlx::query(statement).execute(&pool).await?;
         }
@@ -355,7 +426,7 @@ impl JsonRpcAuthServer for SqlxAuthServer {
         &self,
         refresh_token: &str,
     ) -> Result<TokenResponse, Self::StorageError> {
-        let subject = self.inner.tokens.verify_refresh_token(refresh_token)?;
+        let (subject, session) = self.inner.tokens.verify_refresh_session(refresh_token)?;
         let row = with_sql!(
             self,
             "SELECT id FROM users WHERE id = ?",
@@ -364,11 +435,17 @@ impl JsonRpcAuthServer for SqlxAuthServer {
         )?
         .ok_or(AuthError::Unauthorized)?;
         let id: String = row.try_get("id")?;
+        if let Some((sid, device_id)) = &session {
+            self.touch_session(&id, sid, device_id).await?;
+        }
         let roles = self.roles_for_user(&id).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner
-            .tokens
-            .refresh_pair(refresh_token, &roles, &permissions)
+        self.inner.tokens.refresh_session_pair(
+            &id,
+            &roles,
+            &permissions,
+            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+        )
     }
 
     async fn handle_register(
@@ -482,6 +559,17 @@ impl JsonRpcAuthServer for SqlxAuthServer {
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
+        self.handle_login_with_device(req, None).await
+    }
+
+    async fn handle_login_with_device(
+        &self,
+        req: LoginRequest,
+        device: Option<DeviceInfo>,
+    ) -> Result<TokenResponse, Self::StorageError> {
+        if let Some(device) = &device {
+            device.validate()?;
+        }
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(
                 "grant_type must be `password`".to_owned(),
@@ -503,7 +591,18 @@ impl JsonRpcAuthServer for SqlxAuthServer {
             .map_err(|_| AuthError::Unauthorized)?;
         let roles = self.roles_for_user(&id).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner.tokens.issue_pair(&id, &roles, &permissions)
+        match device {
+            Some(device) => {
+                let sid = self.open_session(&id, &device).await?;
+                self.inner.tokens.issue_session_pair(
+                    &id,
+                    &roles,
+                    &permissions,
+                    Some((&sid, &device.device_id)),
+                )
+            }
+            None => self.inner.tokens.issue_pair(&id, &roles, &permissions),
+        }
     }
 
     async fn handle_external_login(

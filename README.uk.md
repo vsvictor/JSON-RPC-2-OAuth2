@@ -399,7 +399,7 @@ state та PKCE-дані із серверної сесії й не викори
 
 - `auth.register`: приймає `email`, `password` і необов'язковий `profile` зі
   значеннями-рядками.
-- `auth.login`: приймає `email`, `password` і `grant_type: "password"`.
+- `auth.login`: приймає `email`, `password` і `grant_type: "password"`, а також необов'язкове `device: { "deviceId": "<id>", "os": { "name": "Android|iOS", "version": "<версія ОС>" } }` (`deviceId`: 1–128 символів `A-Za-z0-9._:-`; `os` необов'язкове й зберігається разом із сесією). В усіх сховищах (MongoDB, SQLite, SQLx, MSSQL, Oracle, Redis, Cassandra/Scylla, HBase) кожна пара `(користувач, пристрій)` має одну сесію: два пристрої одного акаунта — це дві незалежні сесії, а повторний вхід на пристрої анулює попередній refresh-токен цього пристрою. Без `device` працює попередня схема без сесій.
 - `auth.refresh`: приймає `refresh_token`.
 - `auth.requestPasswordReset`: приймає `email`. Завжди відповідає
   `{"accepted": true}`, тож наявність акаунта не розкривається. Для відомого

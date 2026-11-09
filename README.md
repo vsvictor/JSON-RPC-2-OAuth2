@@ -397,7 +397,7 @@ re-use state across browser sessions.
 
 - `auth.register`: accepts `email`, `password`, and optional string-valued
   `profile`.
-- `auth.login`: accepts `email`, `password`, and `grant_type: "password"`.
+- `auth.login`: accepts `email`, `password`, and `grant_type: "password"`, plus an optional `device: { "deviceId": "<id>", "os": { "name": "Android|iOS", "version": "<os version>" } }` (`deviceId`: 1–128 chars of `A-Za-z0-9._:-`; `os` is optional and stored with the session). With every storage backend (MongoDB, SQLite, SQLx, MSSQL, Oracle, Redis, Cassandra/Scylla, HBase) each `(user, device)` pair owns one session: two devices on one account are two independent sessions, and signing in again on a device invalidates that device's previous refresh token. Without `device` the legacy sessionless flow is used.
 - `auth.refresh`: accepts `refresh_token`.
 - `auth.requestPasswordReset`: accepts `email`. Always answers
   `{"accepted": true}`, so account existence is never revealed. For a known

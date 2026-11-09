@@ -1,5 +1,6 @@
 use crate::{
-    AccessTokenClaims, AuthError, DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest,
+    AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
+    LoginRequest,
     ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     profile::{parse_profile, profile_to_json},
     token::TokenService,
@@ -25,6 +26,7 @@ use tokio::sync::OnceCell;
 
 const USERS: &str = "users";
 const ROLES: &str = "roles";
+const SESSIONS: &str = "sessions";
 
 struct Inner {
     config: RwLock<DbConfig>,
@@ -133,9 +135,10 @@ impl MongoAuthServer {
         server.register("auth.login", move |params| {
             let service = service.clone();
             async move {
-                let request = parse_params(params)?;
+                let request = parse_params(params.clone())?;
+                let device = crate::rpc::parse_device(&params)?;
                 let token = service
-                    .handle_login(request)
+                    .handle_login_with_device(request, device)
                     .await
                     .map_err(AuthError::into_rpc_error)?;
                 to_value(token)
@@ -243,18 +246,69 @@ impl MongoAuthServer {
     }
 
     async fn refresh_session(&self, refresh_token: &str) -> Result<TokenResponse, AuthError> {
-        let subject = self.inner.tokens.verify_refresh_token(refresh_token)?;
+        let (subject, session) = self.inner.tokens.verify_refresh_session(refresh_token)?;
         let user_id = parse_object_id(&subject)?;
         let database = self.database()?;
         let user = users(database)
             .find_one(doc! { "_id": user_id })
             .await?
             .ok_or(AuthError::Unauthorized)?;
+        if let Some((sid, device_id)) = &session {
+            self.touch_session(&subject, sid, device_id).await?;
+        }
         let roles = strings_from_document(&user, "roles")?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner
-            .tokens
-            .refresh_pair(refresh_token, &roles, &permissions)
+        self.inner.tokens.refresh_session_pair(
+            &subject,
+            &roles,
+            &permissions,
+            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+        )
+    }
+
+    /// Creates or replaces the single session of `(user, device)` and returns
+    /// its fresh session id. Another device keeps its own, untouched session.
+    async fn open_session(&self, user_id: &str, device: &DeviceInfo) -> Result<String, AuthError> {
+        let sid = ObjectId::new().to_hex();
+        let now = DateTime::now();
+        self.database()?
+            .collection::<Document>(SESSIONS)
+            .update_one(
+                doc! { "user_id": user_id, "device_id": &device.device_id },
+                doc! {
+                    "$set": {
+                        "sid": &sid,
+                        "last_seen": now,
+                        "os_name": device.os_name(),
+                        "os_version": device.os_version(),
+                    },
+                    "$setOnInsert": { "created_at": now },
+                },
+            )
+            .upsert(true)
+            .await?;
+        Ok(sid)
+    }
+
+    /// Requires the session to still be the current one for its device.
+    async fn touch_session(
+        &self,
+        user_id: &str,
+        sid: &str,
+        device_id: &str,
+    ) -> Result<(), AuthError> {
+        let updated = self
+            .database()?
+            .collection::<Document>(SESSIONS)
+            .update_one(
+                doc! { "user_id": user_id, "device_id": device_id, "sid": sid },
+                doc! { "$set": { "last_seen": DateTime::now() } },
+            )
+            .await?;
+        if updated.matched_count == 0 {
+            return Err(AuthError::Unauthorized);
+        }
+        Ok(())
     }
 
     async fn permissions_for_roles(&self, role_names: &[String]) -> Result<Vec<String>, AuthError> {
@@ -441,6 +495,15 @@ impl JsonRpcAuthServer for MongoAuthServer {
                     .build(),
             )
             .await?;
+        database
+            .collection::<Document>(SESSIONS)
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "user_id": 1, "device_id": 1 })
+                    .options(IndexOptions::builder().unique(true).build())
+                    .build(),
+            )
+            .await?;
         let _ = self.inner.database.set(database);
         Ok(())
     }
@@ -556,6 +619,17 @@ impl JsonRpcAuthServer for MongoAuthServer {
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
+        self.handle_login_with_device(req, None).await
+    }
+
+    async fn handle_login_with_device(
+        &self,
+        req: LoginRequest,
+        device: Option<DeviceInfo>,
+    ) -> Result<TokenResponse, Self::StorageError> {
+        if let Some(device) = &device {
+            device.validate()?;
+        }
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(
                 "grant_type must be `password`".to_owned(),
@@ -582,7 +656,18 @@ impl JsonRpcAuthServer for MongoAuthServer {
             .to_hex();
         let roles = strings_from_document(&user, "roles")?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner.tokens.issue_pair(&subject, &roles, &permissions)
+        match device {
+            Some(device) => {
+                let sid = self.open_session(&subject, &device).await?;
+                self.inner.tokens.issue_session_pair(
+                    &subject,
+                    &roles,
+                    &permissions,
+                    Some((&sid, &device.device_id)),
+                )
+            }
+            None => self.inner.tokens.issue_pair(&subject, &roles, &permissions),
+        }
     }
 
     async fn handle_external_login(

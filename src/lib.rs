@@ -52,7 +52,8 @@ pub use hbase_backend::HbaseAuthServer;
 pub use json_rpc_2_oauth2_macros::authorize;
 pub use json_rpc_2_server::{RpcError, RpcServer, ServerPlugin};
 pub use models::{
-    DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest, OAuth2Provider, ProfileFieldType,
+    DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer, LoginRequest, OAuth2Provider,
+    OsInfo, ProfileFieldType,
     ProviderAuthorization, ProviderAuthorizationRequest, ProviderCallbackRequest, RegisterRequest,
     TokenResponse, UserResponse,
 };

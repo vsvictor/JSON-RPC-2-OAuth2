@@ -1,5 +1,6 @@
 use crate::{
-    AccessTokenClaims, AuthError, DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest,
+    AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
+    LoginRequest,
     ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
@@ -330,6 +331,7 @@ impl JsonRpcAuthServer for CassandraAuthServer {
             "CREATE TABLE IF NOT EXISTS user_roles (user_id text, role_name text, PRIMARY KEY (user_id, role_name))",
             "CREATE TABLE IF NOT EXISTS role_permissions (role_name text, permission_name text, PRIMARY KEY (role_name, permission_name))",
             "CREATE TABLE IF NOT EXISTS external_identities (provider text, subject text, user_id text, PRIMARY KEY ((provider, subject)))",
+            "CREATE TABLE IF NOT EXISTS sessions (user_id text, device_id text, sid text, os_name text, os_version text, created_at text, last_seen text, PRIMARY KEY (user_id, device_id))",
         ] {
             session
                 .query_unpaged(statement, ())
@@ -357,7 +359,7 @@ impl JsonRpcAuthServer for CassandraAuthServer {
         &self,
         refresh_token: &str,
     ) -> Result<TokenResponse, Self::StorageError> {
-        let user_id = self.inner.tokens.verify_refresh_token(refresh_token)?;
+        let (user_id, session) = self.inner.tokens.verify_refresh_session(refresh_token)?;
         let table = self.qualified_table("users_by_id")?;
         let rows = select_rows(
             &self.session()?,
@@ -368,11 +370,40 @@ impl JsonRpcAuthServer for CassandraAuthServer {
         if rows.rows_num() == 0 {
             return Err(AuthError::Unauthorized);
         }
+        if let Some((sid, device_id)) = &session {
+            let sessions = self.qualified_table("sessions")?;
+            let db = self.session()?;
+            let current = select_rows(
+                &db,
+                &format!("SELECT sid FROM {sessions} WHERE user_id = ? AND device_id = ?"),
+                (user_id.as_str(), device_id.as_str()),
+            )
+            .await?
+            .maybe_first_row::<(Option<String>,)>()
+            .map_err(cassandra_error)?
+            .and_then(|(current,)| current);
+            if current.as_deref() != Some(sid.as_str()) {
+                return Err(AuthError::Unauthorized);
+            }
+            db.query_unpaged(
+                format!("UPDATE {sessions} SET last_seen = ? WHERE user_id = ? AND device_id = ?"),
+                (
+                    chrono::Utc::now().to_rfc3339().as_str(),
+                    user_id.as_str(),
+                    device_id.as_str(),
+                ),
+            )
+            .await
+            .map_err(cassandra_error)?;
+        }
         let roles = self.roles_for_user(&user_id).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner
-            .tokens
-            .refresh_pair(refresh_token, &roles, &permissions)
+        self.inner.tokens.refresh_session_pair(
+            &user_id,
+            &roles,
+            &permissions,
+            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+        )
     }
 
     async fn handle_register(
@@ -521,6 +552,17 @@ impl JsonRpcAuthServer for CassandraAuthServer {
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
+        self.handle_login_with_device(req, None).await
+    }
+
+    async fn handle_login_with_device(
+        &self,
+        req: LoginRequest,
+        device: Option<DeviceInfo>,
+    ) -> Result<TokenResponse, Self::StorageError> {
+        if let Some(device) = &device {
+            device.validate()?;
+        }
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(
                 "grant_type must be `password`".to_owned(),
@@ -544,7 +586,47 @@ impl JsonRpcAuthServer for CassandraAuthServer {
             .map_err(|_| AuthError::Unauthorized)?;
         let roles = self.roles_for_user(&user_id).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner.tokens.issue_pair(&user_id, &roles, &permissions)
+        let Some(device) = device else {
+            return self.inner.tokens.issue_pair(&user_id, &roles, &permissions);
+        };
+        let sid = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let sessions = self.qualified_table("sessions")?;
+        let db = self.session()?;
+        let existing = select_rows(
+            &db,
+            &format!("SELECT created_at FROM {sessions} WHERE user_id = ? AND device_id = ?"),
+            (user_id.as_str(), device.device_id.as_str()),
+        )
+        .await?;
+        let created_at = existing
+            .maybe_first_row::<(Option<String>,)>()
+            .map_err(cassandra_error)?
+            .and_then(|(created,)| created)
+            .unwrap_or_else(|| now.clone());
+        db.query_unpaged(
+            format!(
+                "INSERT INTO {sessions} (user_id, device_id, sid, os_name, os_version, created_at, last_seen) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                user_id.as_str(),
+                device.device_id.as_str(),
+                sid.as_str(),
+                device.os_name().unwrap_or(""),
+                device.os_version().unwrap_or(""),
+                created_at.as_str(),
+                now.as_str(),
+            ),
+        )
+        .await
+        .map_err(cassandra_error)?;
+        self.inner.tokens.issue_session_pair(
+            &user_id,
+            &roles,
+            &permissions,
+            Some((&sid, &device.device_id)),
+        )
     }
 
     async fn handle_external_login(

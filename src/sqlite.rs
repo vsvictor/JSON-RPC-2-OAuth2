@@ -1,5 +1,6 @@
 use crate::{
-    AuthError, DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest, ProfileFieldType,
+    AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer, LoginRequest,
+    ProfileFieldType,
     RegisterRequest, TokenConfig, TokenResponse, UserResponse, token::TokenService,
 };
 use argon2::{
@@ -291,6 +292,20 @@ impl JsonRpcAuthServer for SqliteAuthServer {
         .execute(&pool)
         .await?;
         create_profile_table(&pool, &self.schema()).await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS sessions (
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                device_id TEXT NOT NULL,
+                sid TEXT NOT NULL,
+                os_name TEXT,
+                os_version TEXT,
+                created_at TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                PRIMARY KEY (user_id, device_id)
+            )",
+        )
+        .execute(&pool)
+        .await?;
         let _ = self.inner.pool.set(pool);
         Ok(())
     }
@@ -314,7 +329,23 @@ impl JsonRpcAuthServer for SqliteAuthServer {
         &self,
         refresh_token: &str,
     ) -> Result<TokenResponse, Self::StorageError> {
-        let subject = self.inner.tokens.verify_refresh_token(refresh_token)?;
+        let subject_and_session = self.inner.tokens.verify_refresh_session(refresh_token)?;
+        let (subject, session) = subject_and_session;
+        if let Some((sid, device_id)) = &session {
+            let now = Utc::now().to_rfc3339();
+            let updated = sqlx::query(
+                "UPDATE sessions SET last_seen = ? WHERE user_id = ? AND device_id = ? AND sid = ?",
+            )
+            .bind(now)
+            .bind(&subject)
+            .bind(device_id)
+            .bind(sid)
+            .execute(self.pool()?)
+            .await?;
+            if updated.rows_affected() == 0 {
+                return Err(AuthError::Unauthorized);
+            }
+        }
         let roles = sqlx::query_scalar::<_, String>(
             "SELECT role_name FROM user_roles WHERE user_id = ? ORDER BY role_name",
         )
@@ -322,9 +353,12 @@ impl JsonRpcAuthServer for SqliteAuthServer {
         .fetch_all(self.pool()?)
         .await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner
-            .tokens
-            .refresh_pair(refresh_token, &roles, &permissions)
+        self.inner.tokens.refresh_session_pair(
+            &subject,
+            &roles,
+            &permissions,
+            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+        )
     }
 
     async fn handle_register(
@@ -417,6 +451,17 @@ impl JsonRpcAuthServer for SqliteAuthServer {
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
+        self.handle_login_with_device(req, None).await
+    }
+
+    async fn handle_login_with_device(
+        &self,
+        req: LoginRequest,
+        device: Option<DeviceInfo>,
+    ) -> Result<TokenResponse, Self::StorageError> {
+        if let Some(device) = &device {
+            device.validate()?;
+        }
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(
                 "grant_type must be `password`".to_owned(),
@@ -441,7 +486,30 @@ impl JsonRpcAuthServer for SqliteAuthServer {
         .fetch_all(self.pool()?)
         .await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner.tokens.issue_pair(&id, &roles, &permissions)
+        let Some(device) = device else {
+            return self.inner.tokens.issue_pair(&id, &roles, &permissions);
+        };
+        let sid = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO sessions (user_id, device_id, sid, os_name, os_version, created_at, last_seen)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (user_id, device_id) DO UPDATE SET
+                sid = excluded.sid, os_name = excluded.os_name,
+                os_version = excluded.os_version, last_seen = excluded.last_seen",
+        )
+        .bind(&id)
+        .bind(&device.device_id)
+        .bind(&sid)
+        .bind(device.os_name())
+        .bind(device.os_version())
+        .bind(&now)
+        .bind(&now)
+        .execute(self.pool()?)
+        .await?;
+        self.inner
+            .tokens
+            .issue_session_pair(&id, &roles, &permissions, Some((&sid, &device.device_id)))
     }
 
     async fn handle_external_login(

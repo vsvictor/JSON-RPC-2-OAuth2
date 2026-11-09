@@ -1,5 +1,6 @@
 use crate::{
-    AccessTokenClaims, AuthError, DbConfig, ExternalIdentity, JsonRpcAuthServer, LoginRequest,
+    AccessTokenClaims, AuthError, DbConfig, DeviceInfo, ExternalIdentity, JsonRpcAuthServer,
+    LoginRequest,
     ProfileFieldType, RegisterRequest, TokenConfig, TokenResponse, UserResponse,
     token::TokenService,
 };
@@ -282,7 +283,7 @@ impl JsonRpcAuthServer for RedisAuthServer {
         &self,
         refresh_token: &str,
     ) -> Result<TokenResponse, Self::StorageError> {
-        let subject = self.inner.tokens.verify_refresh_token(refresh_token)?;
+        let (subject, session) = self.inner.tokens.verify_refresh_session(refresh_token)?;
         let user_json: Option<String> = redis::cmd("GET")
             .arg(user_key(&subject))
             .query_async(&mut self.connection()?)
@@ -291,11 +292,31 @@ impl JsonRpcAuthServer for RedisAuthServer {
         if user_json.is_none() {
             return Err(AuthError::Unauthorized);
         }
+        if let Some((sid, device_id)) = &session {
+            let script = Script::new(
+                "if redis.call('HGET', KEYS[1], 'sid') == ARGV[1] then \
+                    redis.call('HSET', KEYS[1], 'last_seen', ARGV[2]) return 1 end \
+                 return 0",
+            );
+            let touched: i32 = script
+                .key(session_key(&subject, device_id))
+                .arg(sid)
+                .arg(chrono::Utc::now().to_rfc3339())
+                .invoke_async(&mut self.connection()?)
+                .await
+                .map_err(redis_error)?;
+            if touched == 0 {
+                return Err(AuthError::Unauthorized);
+            }
+        }
         let roles = self.roles_for_user(&subject).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner
-            .tokens
-            .refresh_pair(refresh_token, &roles, &permissions)
+        self.inner.tokens.refresh_session_pair(
+            &subject,
+            &roles,
+            &permissions,
+            session.as_ref().map(|(sid, device)| (sid.as_str(), device.as_str())),
+        )
     }
 
     async fn handle_register(
@@ -403,6 +424,17 @@ impl JsonRpcAuthServer for RedisAuthServer {
     }
 
     async fn handle_login(&self, req: LoginRequest) -> Result<TokenResponse, Self::StorageError> {
+        self.handle_login_with_device(req, None).await
+    }
+
+    async fn handle_login_with_device(
+        &self,
+        req: LoginRequest,
+        device: Option<DeviceInfo>,
+    ) -> Result<TokenResponse, Self::StorageError> {
+        if let Some(device) = &device {
+            device.validate()?;
+        }
         if req.grant_type != "password" {
             return Err(AuthError::InvalidParams(
                 "grant_type must be `password`".to_owned(),
@@ -433,7 +465,34 @@ impl JsonRpcAuthServer for RedisAuthServer {
             .map_err(|_| AuthError::Unauthorized)?;
         let roles = self.roles_for_user(&user.id).await?;
         let permissions = self.permissions_for_roles(&roles).await?;
-        self.inner.tokens.issue_pair(&user.id, &roles, &permissions)
+        let Some(device) = device else {
+            return self.inner.tokens.issue_pair(&user.id, &roles, &permissions);
+        };
+        let sid = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let key = session_key(&user.id, &device.device_id);
+        let script = Script::new(
+            "local created = redis.call('HGET', KEYS[1], 'created_at') \
+             if not created then created = ARGV[4] end \
+             redis.call('HSET', KEYS[1], 'sid', ARGV[1], 'os_name', ARGV[2], 'os_version', ARGV[3], \
+                'created_at', created, 'last_seen', ARGV[4]) \
+             return 1",
+        );
+        let _: i32 = script
+            .key(key)
+            .arg(&sid)
+            .arg(device.os_name().unwrap_or(""))
+            .arg(device.os_version().unwrap_or(""))
+            .arg(&now)
+            .invoke_async(&mut self.connection()?)
+            .await
+            .map_err(redis_error)?;
+        self.inner.tokens.issue_session_pair(
+            &user.id,
+            &roles,
+            &permissions,
+            Some((&sid, &device.device_id)),
+        )
     }
 
     async fn handle_external_login(
@@ -737,6 +796,10 @@ fn email_key(email: &str) -> String {
 
 fn profile_key(id: &str) -> String {
     format!("auth:profile:{id}")
+}
+
+fn session_key(user_id: &str, device_id: &str) -> String {
+    format!("auth:session:{user_id}:{device_id}")
 }
 
 fn external_identity_key(provider: &str, subject: &str) -> String {
