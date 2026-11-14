@@ -206,13 +206,13 @@ impl MssqlAuthServer {
             };
             (user, profile)
         };
-        Ok(UserResponse {
+        Ok(crate::contacts::with_legacy_contacts(UserResponse {
             id: user.id.clone(),
             email: user.email,
             created_at: user.created_at,
             roles: self.roles_for_user(&user.id).await?,
             profile,
-        })
+        }))
     }
 }
 

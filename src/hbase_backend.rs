@@ -213,13 +213,13 @@ impl HbaseAuthServer {
         let created_at = decode(required("created_at")?)?;
         let profile_json = decode(required("profile_json")?)?;
         let profile = serde_json::from_str(&profile_json)?;
-        Ok(UserResponse {
+        Ok(crate::contacts::with_legacy_contacts(UserResponse {
             id: id.to_owned(),
             email,
             created_at,
             roles: self.roles_for_user(id).await?,
             profile,
-        })
+        }))
     }
 
     async fn remove_registered_user(&self, id: &str, email: &str) -> Result<(), AuthError> {

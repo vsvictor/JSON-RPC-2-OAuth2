@@ -191,13 +191,13 @@ impl OracleAuthServer {
             };
             (id, email, created_at, profile)
         };
-        Ok(UserResponse {
+        Ok(crate::contacts::with_legacy_contacts(UserResponse {
             id: id.clone(),
             email,
             created_at,
             roles: self.roles_for_user(&id).await?,
             profile,
-        })
+        }))
     }
 }
 

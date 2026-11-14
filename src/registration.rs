@@ -3,8 +3,7 @@ use std::collections::HashMap;
 
 const ACCOUNT_TYPES: [&str; 2] = ["private", "corporate"];
 
-/// Adds the built-in registration fields (text) to a storage profile schema
-/// unless the application already defined them.
+/// Adds registration text fields and the reserved structured contacts field.
 #[allow(dead_code)]
 pub(crate) fn with_registration_fields(
     mut schema: HashMap<String, ProfileFieldType>,
@@ -14,6 +13,7 @@ pub(crate) fn with_registration_fields(
             .entry(name.to_owned())
             .or_insert(ProfileFieldType::Text);
     }
+    schema.insert("contacts".to_owned(), ProfileFieldType::Contacts);
     schema
 }
 
@@ -25,6 +25,9 @@ pub(crate) fn with_registration_fields(
 pub(crate) fn validate_registration(request: &mut RegisterRequest) -> Result<(), AuthError> {
     for value in request.profile.values_mut() {
         *value = value.trim().to_owned();
+    }
+    if let Some(raw) = request.profile.get_mut("contacts") {
+        *raw = crate::contacts::parse_contacts(raw)?.to_string();
     }
     for name in ["first_name", "last_name"] {
         if request.profile.get(name).is_none_or(String::is_empty) {

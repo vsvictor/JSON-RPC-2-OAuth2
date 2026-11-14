@@ -96,6 +96,8 @@ pub enum ProfileFieldType {
     Boolean,
     DateTime,
     Blob,
+    /// Validated array of [`crate::ProfileContact`]; built in as `contacts`.
+    Contacts,
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -125,7 +127,13 @@ impl fmt::Debug for DbConfig {
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
-    #[serde(default)]
+    /// Scalar fields remain strings. JSON accepts a native `contacts` array;
+    /// direct Rust callers supply its JSON encoding as the map's string value.
+    #[serde(
+        default,
+        deserialize_with = "crate::contacts::deserialize_profile",
+        serialize_with = "crate::contacts::serialize_profile"
+    )]
     pub profile: HashMap<String, String>,
 }
 

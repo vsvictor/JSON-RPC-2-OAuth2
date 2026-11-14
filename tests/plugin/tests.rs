@@ -48,7 +48,12 @@ async fn profile_reader_returns_current_storage_data_for_authenticated_subject()
         assert_eq!(response["result"]["id"], user.id);
         assert_eq!(response["result"]["email"], user.email);
         assert_eq!(response["result"]["roles"], json!(["new-role"]));
-        assert_eq!(response["result"]["profile"], json!({}));
+        assert_eq!(
+            response["result"]["profile"],
+            json!({
+                "contacts": [{"type":"email", "value": "profile@example.test"}]
+            })
+        );
         assert!(response["result"].get("password_hash").is_none());
     }
     for params in [

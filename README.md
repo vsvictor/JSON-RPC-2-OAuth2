@@ -423,7 +423,64 @@ bearer headers can use `authenticate_access_token` or `require_permission` in
 their own middleware instead. The first administrative role and permissions
 must be provisioned out of band.
 
-Dynamic profile values are accepted as strings and validated/cast according to
+### Structured profile contacts
+
+`auth.register` and `auth.updateProfile` accept the built-in `profile.contacts`
+field as a real JSON array, returned unchanged in shape by `auth.getProfile`:
+
+```json
+{"profile":{"contacts":[{"type":"email","value":"contact@example.invalid"},{"type":"telegram","value":"@example_contact"}]}}
+```
+
+The shared Rust model is `ProfileContact { contact_type: ContactType, value: String }`
+(the serialized key is `type`). Supported case-sensitive labels are `phone`,
+`email`, `telegram`, `viber`, `facebook`, `x`, `instagram`, `tiktok`,
+`whatsapp`, `signal`, `linkedin`, and `website`.
+`validate_contacts` is exported for applications with their own profile endpoints.
+The list replaces the previous list in full; duplicates and order are retained.
+Omitting the field during an update leaves it unchanged. An explicit `[]` clears
+it and suppresses legacy fallback. If absent in storage, responses include the
+login email as one email contact (without writing a backfill). The top-level
+`email` is always the independent login/reset identity, not the first contact.
+Contact edits never verify an email, enable login/reset, or link external accounts.
+Provider-created accounts use the same fallback and existing verified-provider
+identity/linking rules; contact metadata does not change those rules.
+
+Validation trims values and permits at most 32 entries, each nonempty, at most
+2048 UTF-8 bytes, with no control characters. Unknown labels, additional object
+fields, non-string values, and non-array lists are rejected. Email values require
+one `@`, nonempty local/domain parts, a dotted domain, no whitespace, and at most
+254 bytes. Phone, Viber and WhatsApp values require 7–15 digits and may include a leading
+`+`, spaces, `-`, `.`, and parentheses. Social values accept an optional `@`
+followed by an ASCII handle (`A-Za-z0-9_.-`), or an HTTPS URL with a profile path
+on the matching provider host: `t.me`/`telegram.me`, `facebook.com`/`fb.com`,
+`x.com`/`twitter.com`, `instagram.com`, `tiktok.com`, `linkedin.com`, or `signal.me`.
+Signal also accepts a phone number with a leading `+`; Signal links may identify
+the contact in the URL fragment (including `#p/` and `#eu/` links).
+Website values require an HTTP or HTTPS URL with a host, no whitespace or
+credentials; root URLs and explicit ports are allowed. Optional `www.` is accepted for social URLs;
+URL credentials and non-default ports are not.
+
+Rust callers keep the source-compatible `HashMap<String, String>` profile API:
+encode contacts using `serde_json::to_string(&contacts)?` as the map value.
+Request serialization emits a native array, while deserialization also accepts
+that legacy JSON-string encoding. Other profile fields still require strings.
+`contacts` is reserved as `ProfileFieldType::Contacts` in every storage schema.
+This works with direct storage APIs, RPC registration, `AuthPlugin`, either bearer
+params form, device/sessionless login, and every enabled OAuth provider.
+
+MongoDB stores a BSON array; SQLite adds a nullable `contacts TEXT` column through
+its existing startup schema migration and stores array JSON there. SQLx PostgreSQL,
+MySQL and SQLite, Redis, Oracle, MSSQL, Cassandra/Scylla and HBase retain typed
+arrays in their existing profile JSON. SQLx startup widens legacy PostgreSQL
+`profile_json VARCHAR(16000)` to `TEXT`, and MySQL to `LONGTEXT`; the database user
+needs the corresponding ALTER permission (or an administrator can apply these
+non-destructive changes first). Other backends need no schema migration.
+If an application previously used a custom scalar `contacts` field, convert it
+to the array format before enabling this reserved field; it is not guessed or
+treated as a verified identity.
+
+Other dynamic profile values are accepted as strings and validated/cast according to
 `ProfileFieldType`: text, signed 64-bit integer, finite float, boolean, RFC 3339
 datetime, or standard Base64-encoded binary. Profile field names are restricted
 to ASCII identifiers to prevent MongoDB dotted-path/operator injection.

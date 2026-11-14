@@ -18,6 +18,10 @@ pub(crate) fn parse_profile(
             AuthError::InvalidParams(format!("profile field `{name}` is not defined"))
         })?;
         let bson = match field_type {
+            ProfileFieldType::Contacts => {
+                mongodb::bson::to_bson(&crate::contacts::parse_contacts(value)?)
+                    .map_err(|error| AuthError::InvalidConfiguration(error.to_string()))?
+            }
             ProfileFieldType::Text => Bson::String(value.clone()),
             ProfileFieldType::Integer => Bson::Int64(value.parse().map_err(|_| {
                 AuthError::InvalidParams(format!("profile field `{name}` must be an integer"))
@@ -76,6 +80,12 @@ pub(crate) fn profile_to_json(
             ))
         })?;
         let value = match (field_type, bson) {
+            (ProfileFieldType::Contacts, Bson::Array(value)) => {
+                let json = serde_json::to_value(value)?;
+                crate::contacts::parse_contacts(&json.to_string()).map_err(|error| {
+                    AuthError::InvalidConfiguration(format!("stored contacts are invalid: {error}"))
+                })?
+            }
             (ProfileFieldType::Text, Bson::String(value)) => serde_json::Value::String(value),
             (ProfileFieldType::Integer, Bson::Int32(value)) => {
                 serde_json::Value::Number(value.into())

@@ -321,6 +321,7 @@ impl AuthenticatedParams {
 struct ProfileParams {
     #[serde(flatten)]
     auth: AuthenticatedParams,
+    #[serde(deserialize_with = "crate::contacts::deserialize_profile")]
     profile: HashMap<String, String>,
 }
 

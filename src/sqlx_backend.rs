@@ -316,13 +316,13 @@ impl SqlxAuthServer {
             Some(json) => serde_json::from_str(&json)?,
             None => HashMap::new(),
         };
-        Ok(UserResponse {
+        Ok(crate::contacts::with_legacy_contacts(UserResponse {
             id: id.clone(),
             email: row.try_get("email")?,
             created_at: row.try_get("created_at")?,
             roles: self.roles_for_user(&id).await?,
             profile,
-        })
+        }))
     }
 }
 
@@ -401,11 +401,36 @@ impl JsonRpcAuthServer for SqlxAuthServer {
             "CREATE TABLE IF NOT EXISTS roles (name VARCHAR(128) PRIMARY KEY NOT NULL)",
             "CREATE TABLE IF NOT EXISTS user_roles (user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE, role_name VARCHAR(128) NOT NULL REFERENCES roles(name) ON DELETE CASCADE, PRIMARY KEY (user_id, role_name))",
             "CREATE TABLE IF NOT EXISTS role_permissions (role_name VARCHAR(128) NOT NULL REFERENCES roles(name) ON DELETE CASCADE, permission_name VARCHAR(128) NOT NULL, PRIMARY KEY (role_name, permission_name))",
-            "CREATE TABLE IF NOT EXISTS user_profiles (user_id VARCHAR(36) PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE, profile_json VARCHAR(16000) NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS user_profiles (user_id VARCHAR(36) PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE, profile_json TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS external_identities (provider VARCHAR(64) NOT NULL, subject VARCHAR(512) NOT NULL, user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY (provider, subject))",
             "CREATE TABLE IF NOT EXISTS sessions (user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE, device_id VARCHAR(128) NOT NULL, sid VARCHAR(64) NOT NULL, os_name VARCHAR(32), os_version VARCHAR(64), created_at VARCHAR(40) NOT NULL, last_seen VARCHAR(40) NOT NULL, PRIMARY KEY (user_id, device_id))",
         ] {
-            sqlx::query(statement).execute(&pool).await?;
+            let statement = if self.inner.database_kind.is_mysql() {
+                statement.replace("profile_json TEXT", "profile_json LONGTEXT")
+            } else {
+                statement.to_owned()
+            };
+            sqlx::query(&statement).execute(&pool).await?;
+        }
+        let migration = match self.inner.database_kind {
+            SqlDatabase::PostgreSql => Some((
+                "SELECT data_type FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'user_profiles' AND column_name = 'profile_json'",
+                "character varying",
+                "ALTER TABLE user_profiles ALTER COLUMN profile_json TYPE TEXT",
+            )),
+            SqlDatabase::MySql => Some((
+                "SELECT data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'user_profiles' AND column_name = 'profile_json'",
+                "varchar",
+                "ALTER TABLE user_profiles MODIFY COLUMN profile_json LONGTEXT NOT NULL",
+            )),
+            SqlDatabase::Sqlite => None,
+        };
+        if let Some((inspect, old_type, alter)) = migration {
+            let data_type: Option<String> =
+                sqlx::query_scalar(inspect).fetch_optional(&pool).await?;
+            if data_type.as_deref() == Some(old_type) {
+                sqlx::query(alter).execute(&pool).await?;
+            }
         }
         let _ = self.inner.pool.set(pool);
         Ok(())

@@ -371,13 +371,13 @@ impl MongoAuthServer {
             .to_rfc3339();
         let roles = strings_from_document(&user, "roles")?;
         let profile = user.get_document("profile").cloned().unwrap_or_default();
-        Ok(UserResponse {
+        Ok(crate::contacts::with_legacy_contacts(UserResponse {
             id: object_id.to_hex(),
             email,
             created_at,
             roles,
             profile: profile_to_json(&self.schema(), profile)?,
-        })
+        }))
     }
 }
 
@@ -997,6 +997,7 @@ impl AuthenticatedParams {
 struct AuthenticatedProfileParams {
     #[serde(flatten)]
     auth: AuthenticatedParams,
+    #[serde(deserialize_with = "crate::contacts::deserialize_profile")]
     profile: HashMap<String, String>,
 }
 

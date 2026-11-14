@@ -212,13 +212,13 @@ impl CassandraAuthServer {
             .maybe_first_row::<(String, String, String)>()
             .map_err(cassandra_error)?
             .ok_or_else(|| AuthError::InvalidParams("user not found".to_owned()))?;
-        Ok(UserResponse {
+        Ok(crate::contacts::with_legacy_contacts(UserResponse {
             id: user_id.to_owned(),
             email,
             created_at,
             roles: self.roles_for_user(user_id).await?,
             profile: serde_json::from_str(&profile_json)?,
-        })
+        }))
     }
 }
 

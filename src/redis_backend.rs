@@ -157,13 +157,13 @@ impl RedisAuthServer {
             .transpose()?
             .unwrap_or_default();
         let roles = self.roles_for_user(id).await?;
-        Ok(UserResponse {
+        Ok(crate::contacts::with_legacy_contacts(UserResponse {
             id: user.id,
             email: user.email,
             created_at: user.created_at,
             roles,
             profile,
-        })
+        }))
     }
 
     async fn roles_for_user(&self, user_id: &str) -> Result<Vec<String>, AuthError> {

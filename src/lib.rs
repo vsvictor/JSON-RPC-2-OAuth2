@@ -8,6 +8,7 @@
 #[cfg(any(feature = "sqlite", feature = "sqlx"))]
 extern crate sqlx_driver as sqlx;
 
+mod contacts;
 mod error;
 #[cfg(feature = "hbase")]
 mod hbase_backend;
@@ -45,6 +46,8 @@ mod sqlite;
 #[cfg(feature = "sqlx")]
 mod sqlx_backend;
 mod token;
+
+pub use contacts::{ContactType, ProfileContact, validate_contacts};
 
 pub use error::AuthError;
 #[cfg(feature = "hbase")]

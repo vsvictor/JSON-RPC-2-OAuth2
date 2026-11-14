@@ -15,6 +15,7 @@ pub(crate) fn parse_profile(
                 AuthError::InvalidParams(format!("profile field `{name}` is not defined"))
             })?;
             let value = match kind {
+                ProfileFieldType::Contacts => crate::contacts::parse_contacts(raw)?,
                 ProfileFieldType::Text => Value::String(raw.clone()),
                 ProfileFieldType::Integer => Value::Number(
                     raw.parse::<i64>()

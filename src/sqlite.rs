@@ -130,13 +130,13 @@ impl SqliteAuthServer {
         .bind(id)
         .fetch_all(self.pool()?)
         .await?;
-        Ok(UserResponse {
+        Ok(crate::contacts::with_legacy_contacts(UserResponse {
             id: row.try_get("id")?,
             email: row.try_get("email")?,
             created_at: row.try_get("created_at")?,
             roles,
             profile,
-        })
+        }))
     }
 
     async fn permissions_for_roles(&self, roles: &[String]) -> Result<Vec<String>, AuthError> {
@@ -785,6 +785,9 @@ fn parse_profile(
                 AuthError::InvalidParams(format!("profile field `{name}` is not defined"))
             })?;
             let parsed = match kind {
+                ProfileFieldType::Contacts => {
+                    ProfileValue::Text(crate::contacts::parse_contacts(value)?.to_string())
+                }
                 ProfileFieldType::Text => ProfileValue::Text(value.clone()),
                 ProfileFieldType::Integer => {
                     ProfileValue::Integer(value.parse().map_err(|_| {
@@ -915,7 +918,7 @@ fn push_bind(query: &mut QueryBuilder<'_, Sqlite>, value: &ProfileValue) {
 
 fn sqlite_type(kind: &ProfileFieldType) -> &'static str {
     match kind {
-        ProfileFieldType::Text | ProfileFieldType::DateTime => "TEXT",
+        ProfileFieldType::Text | ProfileFieldType::DateTime | ProfileFieldType::Contacts => "TEXT",
         ProfileFieldType::Integer | ProfileFieldType::Boolean => "INTEGER",
         ProfileFieldType::Float => "REAL",
         ProfileFieldType::Blob => "BLOB",
@@ -930,6 +933,20 @@ fn profile_to_json(
         .iter()
         .filter_map(|(name, kind)| {
             let value = match kind {
+                ProfileFieldType::Contacts => row
+                    .try_get::<Option<String>, _>(name.as_str())
+                    .and_then(|value| {
+                        value
+                            .map(|raw| {
+                                crate::contacts::parse_contacts(&raw).map_err(|error| {
+                                    sqlx::Error::ColumnDecode {
+                                        index: name.clone(),
+                                        source: Box::new(std::io::Error::other(error.to_string())),
+                                    }
+                                })
+                            })
+                            .transpose()
+                    }),
                 ProfileFieldType::Text => row
                     .try_get::<Option<String>, _>(name.as_str())
                     .map(|value| value.map(Value::String)),
