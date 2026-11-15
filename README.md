@@ -398,6 +398,7 @@ re-use state across browser sessions.
 - `auth.register`: accepts `email`, `password`, and optional string-valued
   `profile`.
 - `auth.login`: accepts `email`, `password`, and `grant_type: "password"`, plus an optional `device: { "deviceId": "<id>", "os": { "name": "Android|iOS", "version": "<os version>" } }` (`deviceId`: 1–128 chars of `A-Za-z0-9._:-`; `os` is optional and stored with the session). With every storage backend (MongoDB, SQLite, SQLx, MSSQL, Oracle, Redis, Cassandra/Scylla, HBase) each `(user, device)` pair owns one session: two devices on one account are two independent sessions, and signing in again on a device invalidates that device's previous refresh token. Without `device` the legacy sessionless flow is used.
+- `auth.loginWithGoogle` (feature `oauth-google`, registered via `register_google_login(storage, &server, client_ids)`): accepts `id_token` (a Google Sign-In ID token obtained natively on the client). The token's signature, issuer, expiry and audience (must be one of `client_ids`) are verified against Google's JWKS; then the external identity is signed in like `handle_external_login` and the usual token pair is returned. A new account is created only for a verified email.
 - `auth.refresh`: accepts `refresh_token`.
 - `auth.requestPasswordReset`: accepts `email`. Always answers
   `{"accepted": true}`, so account existence is never revealed. For a known

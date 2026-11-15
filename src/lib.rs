@@ -73,6 +73,8 @@ pub use rpc::{
     PasswordResetNotice, PasswordResetNotifier, register_auth_methods,
     register_auth_methods_with_reset_notifier,
 };
+#[cfg(feature = "oauth-google")]
+pub use rpc::register_google_login;
 #[cfg(feature = "cassandra")]
 pub use scylla_backend::CassandraAuthServer;
 #[cfg(feature = "sqlite")]

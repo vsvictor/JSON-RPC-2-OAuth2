@@ -419,6 +419,19 @@ pub trait JsonRpcAuthServer: Send + Sync {
         self.link_external_identity(user_id, identity).await
     }
 
+    #[cfg(feature = "oauth-google")]
+    async fn handle_google_id_token(
+        &self,
+        client_ids: &[String],
+        id_token: &str,
+    ) -> Result<TokenResponse, AuthError>
+    where
+        Self: JsonRpcAuthServer<StorageError = AuthError>,
+    {
+        let identity = crate::oauth2_providers::verify_google_id_token(id_token, client_ids).await?;
+        self.handle_external_login(identity).await
+    }
+
     #[cfg(feature = "oauth-provider-core")]
     async fn handle_firebase_id_token(
         &self,

@@ -508,6 +508,81 @@ async fn verify_apple_id_token(
     Ok(profile)
 }
 
+#[derive(Deserialize)]
+struct GoogleIdTokenClaims {
+    sub: String,
+    email: Option<String>,
+    email_verified: Option<GoogleEmailVerified>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum GoogleEmailVerified {
+    Boolean(bool),
+    String(String),
+}
+
+impl GoogleEmailVerified {
+    fn is_verified(&self) -> bool {
+        match self {
+            Self::Boolean(value) => *value,
+            Self::String(value) => value == "true",
+        }
+    }
+}
+
+/// Verify a Google Sign-In ID token (signature, issuer, audience, expiry).
+/// `client_ids` are the OAuth client IDs the token may have been issued for.
+#[cfg(feature = "oauth-google")]
+pub(crate) async fn verify_google_id_token(
+    id_token: &str,
+    client_ids: &[String],
+) -> Result<ExternalIdentity, AuthError> {
+    ensure_provider_enabled(OAuth2Provider::Google)?;
+    if client_ids.is_empty() || client_ids.iter().any(|id| id.trim().is_empty()) {
+        return Err(invalid_config("Google client IDs are not configured"));
+    }
+    let header = jsonwebtoken::decode_header(id_token).map_err(|_| AuthError::Unauthorized)?;
+    if header.alg != Algorithm::RS256 {
+        return Err(AuthError::Unauthorized);
+    }
+    let kid = header.kid.ok_or(AuthError::Unauthorized)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| invalid_config(error.to_string()))?;
+    let jwks: JwkSet = client
+        .get("https://www.googleapis.com/oauth2/v3/certs")
+        .send()
+        .await
+        .map_err(|_| AuthError::Unauthorized)?
+        .error_for_status()
+        .map_err(|_| AuthError::Unauthorized)?
+        .json()
+        .await
+        .map_err(|_| AuthError::Unauthorized)?;
+    let key = jwks.find(&kid).ok_or(AuthError::Unauthorized)?;
+    let decoding_key = DecodingKey::from_jwk(key).map_err(|_| AuthError::Unauthorized)?;
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_audience(client_ids);
+    validation.set_issuer(&["https://accounts.google.com", "accounts.google.com"]);
+    let claims = decode::<GoogleIdTokenClaims>(id_token, &decoding_key, &validation)
+        .map_err(|_| AuthError::Unauthorized)?
+        .claims;
+    if claims.sub.is_empty() {
+        return Err(AuthError::Unauthorized);
+    }
+    Ok(ExternalIdentity {
+        provider: OAuth2Provider::Google,
+        subject: claims.sub,
+        email: claims.email.map(|email| email.trim().to_lowercase()),
+        email_verified: claims
+            .email_verified
+            .as_ref()
+            .is_some_and(GoogleEmailVerified::is_verified),
+    })
+}
+
 pub(crate) async fn verify_firebase_id_token(
     id_token: &str,
     project_id: &str,
@@ -659,6 +734,20 @@ fn invalid_config(message: impl Into<String>) -> AuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[cfg(feature = "oauth-google")]
+    async fn google_id_token_requires_configured_client_ids() {
+        let result = verify_google_id_token("a.b.c", &[]).await;
+        assert!(matches!(result, Err(AuthError::InvalidConfiguration(_))));
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "oauth-google")]
+    async fn google_id_token_rejects_malformed_token_before_network() {
+        let result = verify_google_id_token("not-a-jwt", &["client".to_owned()]).await;
+        assert!(matches!(result, Err(AuthError::Unauthorized)));
+    }
 
     #[tokio::test]
     #[cfg(feature = "oauth-google")]

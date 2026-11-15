@@ -18,6 +18,39 @@ where
     register_auth_methods_with_reset_notifier(storage, server, Arc::new(|_| {}))
 }
 
+/// Register `auth.loginWithGoogle` (`{ "id_token": "<Google ID token>" }`).
+/// Mobile clients obtain the ID token natively; it is accepted only when its
+/// audience is one of `client_ids`. Returns the same tokens as `auth.login`.
+#[cfg(feature = "oauth-google")]
+pub fn register_google_login<S>(
+    storage: S,
+    server: &json_rpc_2_server::RpcServer,
+    client_ids: Vec<String>,
+) -> Result<(), json_rpc_2_server::RegistrationError>
+where
+    S: JsonRpcAuthServer<StorageError = AuthError> + Clone + 'static,
+{
+    let client_ids = Arc::new(client_ids);
+    server.register("auth.loginWithGoogle", move |params| {
+        let service = storage.clone();
+        let client_ids = client_ids.clone();
+        async move {
+            let request: GoogleLoginParams = parse_params(params)?;
+            let tokens = service
+                .handle_google_id_token(&client_ids, &request.id_token)
+                .await
+                .map_err(AuthError::into_rpc_error)?;
+            to_value(tokens)
+        }
+    })
+}
+
+#[cfg(feature = "oauth-google")]
+#[derive(Deserialize)]
+struct GoogleLoginParams {
+    id_token: String,
+}
+
 /// Delivery hook for password-reset tokens. The server never sends e-mail and
 /// never logs the token; the application delivers it however it chooses.
 #[derive(Clone)]

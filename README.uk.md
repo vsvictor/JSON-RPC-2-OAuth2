@@ -400,6 +400,7 @@ state та PKCE-дані із серверної сесії й не викори
 - `auth.register`: приймає `email`, `password` і необов'язковий `profile` зі
   значеннями-рядками.
 - `auth.login`: приймає `email`, `password` і `grant_type: "password"`, а також необов'язкове `device: { "deviceId": "<id>", "os": { "name": "Android|iOS", "version": "<версія ОС>" } }` (`deviceId`: 1–128 символів `A-Za-z0-9._:-`; `os` необов'язкове й зберігається разом із сесією). В усіх сховищах (MongoDB, SQLite, SQLx, MSSQL, Oracle, Redis, Cassandra/Scylla, HBase) кожна пара `(користувач, пристрій)` має одну сесію: два пристрої одного акаунта — це дві незалежні сесії, а повторний вхід на пристрої анулює попередній refresh-токен цього пристрою. Без `device` працює попередня схема без сесій.
+- `auth.loginWithGoogle` (feature `oauth-google`, реєструється через `register_google_login(storage, &server, client_ids)`): приймає `id_token` (Google Sign-In ID-токен, отриманий нативно на клієнті). Підпис, issuer, термін дії та audience (має бути одним із `client_ids`) перевіряються за JWKS Google; далі зовнішня ідентичність входить як у `handle_external_login`, і повертається звична пара токенів. Новий акаунт створюється лише для підтвердженого email.
 - `auth.refresh`: приймає `refresh_token`.
 - `auth.requestPasswordReset`: приймає `email`. Завжди відповідає
   `{"accepted": true}`, тож наявність акаунта не розкривається. Для відомого
