@@ -50,6 +50,16 @@ where
         server.register(name, move |params| handler(plugin.clone(), params))
     }
 
+    /// Registers `auth.loginWithGoogle` for ID tokens issued to `client_ids`.
+    #[cfg(feature = "oauth-google")]
+    pub fn register_google_login(
+        &self,
+        server: &RpcServer,
+        client_ids: Vec<String>,
+    ) -> Result<(), RegistrationError> {
+        crate::register_google_login(self.storage.clone(), server, client_ids)
+    }
+
     /// Validates an access token and requires every named RBAC permission.
     ///
     /// Token parameters work identically on all JSON-RPC transports. Never use
