@@ -27,9 +27,14 @@ const USERS: &str = "users";
 const ROLES: &str = "roles";
 const SESSIONS: &str = "sessions";
 
+#[cfg(test)]
+#[path = "mongo/tests.rs"]
+mod tests;
+
 struct Inner {
     config: RwLock<DbConfig>,
     profile_schema: RwLock<HashMap<String, ProfileFieldType>>,
+    collection_prefix: String,
     database: OnceCell<Database>,
     tokens: TokenService,
 }
@@ -50,10 +55,40 @@ impl MongoAuthServer {
             inner: Arc::new(Inner {
                 config: RwLock::new(DbConfig::default()),
                 profile_schema: RwLock::new(HashMap::new()),
+                collection_prefix: String::new(),
                 database: OnceCell::new(),
                 tokens: TokenService::new(paserk_key, token_config)?,
             }),
         })
+    }
+
+    /// Configure a prefix for all OAuth collections before cloning or initialization.
+    pub fn set_collection_prefix(&mut self, prefix: &str) -> Result<(), AuthError> {
+        let inner = Arc::get_mut(&mut self.inner).ok_or_else(|| {
+            AuthError::InvalidConfiguration(
+                "collection prefix must be configured before cloning the server".to_owned(),
+            )
+        })?;
+        if inner.database.get().is_some() {
+            return Err(AuthError::InvalidConfiguration(
+                "collection prefix cannot change after initialization".to_owned(),
+            ));
+        }
+        if !prefix.is_empty() && !valid_field_name(prefix) {
+            return Err(AuthError::InvalidConfiguration(
+                "invalid MongoDB collection prefix".to_owned(),
+            ));
+        }
+        inner.collection_prefix = prefix.to_owned();
+        Ok(())
+    }
+
+    fn collection_name(&self, name: &str) -> String {
+        format!("{}{name}", self.inner.collection_prefix)
+    }
+
+    fn users(&self, database: &Database) -> Collection<Document> {
+        database.collection(&self.collection_name(USERS))
     }
 
     /// Configure the profile fields before initializing MongoDB.
@@ -250,7 +285,8 @@ impl MongoAuthServer {
         let (subject, session) = self.inner.tokens.verify_refresh_session(refresh_token)?;
         let user_id = parse_object_id(&subject)?;
         let database = self.database()?;
-        let user = users(database)
+        let user = self
+            .users(database)
             .find_one(doc! { "_id": user_id })
             .await?
             .ok_or(AuthError::Unauthorized)?;
@@ -275,7 +311,7 @@ impl MongoAuthServer {
         let sid = ObjectId::new().to_hex();
         let now = DateTime::now();
         self.database()?
-            .collection::<Document>(SESSIONS)
+            .collection::<Document>(&self.collection_name(SESSIONS))
             .update_one(
                 doc! { "user_id": user_id, "device_id": &device.device_id },
                 doc! {
@@ -302,7 +338,7 @@ impl MongoAuthServer {
     ) -> Result<(), AuthError> {
         let updated = self
             .database()?
-            .collection::<Document>(SESSIONS)
+            .collection::<Document>(&self.collection_name(SESSIONS))
             .update_one(
                 doc! { "user_id": user_id, "device_id": device_id, "sid": sid },
                 doc! { "$set": { "last_seen": DateTime::now() } },
@@ -320,7 +356,7 @@ impl MongoAuthServer {
         }
         let mut cursor = self
             .database()?
-            .collection::<Document>(ROLES)
+            .collection::<Document>(&self.collection_name(ROLES))
             .find(doc! { "name": { "$in": role_names } })
             .await?;
         let mut permissions = HashSet::new();
@@ -474,7 +510,7 @@ impl JsonRpcAuthServer for MongoAuthServer {
         let database = client.database(&config.database_name);
         database.run_command(doc! { "ping": 1 }).await?;
 
-        users(&database)
+        self.users(&database)
             .create_index(
                 IndexModel::builder()
                     .keys(doc! { "email": 1 })
@@ -483,7 +519,7 @@ impl JsonRpcAuthServer for MongoAuthServer {
             )
             .await?;
         database
-            .collection::<Document>("external_identities")
+            .collection::<Document>(&self.collection_name("external_identities"))
             .create_index(
                 IndexModel::builder()
                     .keys(doc! { "provider": 1, "subject": 1 })
@@ -492,7 +528,7 @@ impl JsonRpcAuthServer for MongoAuthServer {
             )
             .await?;
         database
-            .collection::<Document>(ROLES)
+            .collection::<Document>(&self.collection_name(ROLES))
             .create_index(
                 IndexModel::builder()
                     .keys(doc! { "name": 1 })
@@ -501,7 +537,7 @@ impl JsonRpcAuthServer for MongoAuthServer {
             )
             .await?;
         database
-            .collection::<Document>(SESSIONS)
+            .collection::<Document>(&self.collection_name(SESSIONS))
             .create_index(
                 IndexModel::builder()
                     .keys(doc! { "user_id": 1, "device_id": 1 })
@@ -538,7 +574,7 @@ impl JsonRpcAuthServer for MongoAuthServer {
     ) -> Result<UserResponse, Self::StorageError> {
         let email = normalize_email(&req.email)?;
         validate_password(&req.password)?;
-        let users = users(self.database()?);
+        let users = self.users(self.database()?);
         if users.find_one(doc! { "email": &email }).await?.is_some() {
             return Err(AuthError::DuplicateEmail);
         }
@@ -566,7 +602,8 @@ impl JsonRpcAuthServer for MongoAuthServer {
         &self,
         email: &str,
     ) -> Result<Option<(String, String)>, AuthError> {
-        let user = users(self.database()?)
+        let user = self
+            .users(self.database()?)
             .find_one(doc! { "email": email })
             .await?;
         user.map(|user| {
@@ -588,7 +625,10 @@ impl JsonRpcAuthServer for MongoAuthServer {
         let Ok(id) = parse_object_id(user_id) else {
             return Ok(None);
         };
-        let user = users(self.database()?).find_one(doc! { "_id": id }).await?;
+        let user = self
+            .users(self.database()?)
+            .find_one(doc! { "_id": id })
+            .await?;
         Ok(user.and_then(|user| user.get_str("password_hash").ok().map(str::to_owned)))
     }
 
@@ -598,7 +638,7 @@ impl JsonRpcAuthServer for MongoAuthServer {
         password_hash: &str,
     ) -> Result<(), AuthError> {
         let id = parse_object_id(user_id)?;
-        users(self.database()?)
+        self.users(self.database()?)
             .update_one(
                 doc! { "_id": id },
                 doc! { "$set": { "password_hash": password_hash } },
@@ -641,7 +681,8 @@ impl JsonRpcAuthServer for MongoAuthServer {
             ));
         }
         let email = normalize_email(&req.email)?;
-        let user = users(self.database()?)
+        let user = self
+            .users(self.database()?)
             .find_one(doc! { "email": email })
             .await?
             .ok_or(AuthError::Unauthorized)?;
@@ -683,7 +724,8 @@ impl JsonRpcAuthServer for MongoAuthServer {
             return Err(AuthError::Unauthorized);
         }
         let database = self.database()?;
-        let identities = database.collection::<Document>("external_identities");
+        let identities =
+            database.collection::<Document>(&self.collection_name("external_identities"));
         let provider = identity.provider.storage_key();
         let linked = identities
             .find_one(doc! { "provider": provider, "subject": &identity.subject })
@@ -721,7 +763,10 @@ impl JsonRpcAuthServer for MongoAuthServer {
                 })
                 .await
             {
-                let _ = users(database).delete_one(doc! { "_id": object_id }).await;
+                let _ = self
+                    .users(database)
+                    .delete_one(doc! { "_id": object_id })
+                    .await;
                 return Err(if error.to_string().contains("E11000") {
                     AuthError::Unauthorized
                 } else {
@@ -730,7 +775,8 @@ impl JsonRpcAuthServer for MongoAuthServer {
             }
             object_id
         };
-        let user = users(database)
+        let user = self
+            .users(database)
             .find_one(doc! { "_id": user_id })
             .await?
             .ok_or(AuthError::Unauthorized)?;
@@ -750,7 +796,8 @@ impl JsonRpcAuthServer for MongoAuthServer {
         }
         let object_id = parse_object_id(&user_id)?;
         let database = self.database()?;
-        if users(database)
+        if self
+            .users(database)
             .find_one(doc! { "_id": object_id })
             .await?
             .is_none()
@@ -758,7 +805,7 @@ impl JsonRpcAuthServer for MongoAuthServer {
             return Err(AuthError::InvalidParams("user not found".to_owned()));
         }
         database
-            .collection::<Document>("external_identities")
+            .collection::<Document>(&self.collection_name("external_identities"))
             .insert_one(doc! {
                 "provider": identity.provider.storage_key(),
                 "subject": identity.subject,
@@ -780,7 +827,8 @@ impl JsonRpcAuthServer for MongoAuthServer {
         user_id: String,
     ) -> Result<UserResponse, Self::StorageError> {
         let object_id = parse_object_id(&user_id)?;
-        let user = users(self.database()?)
+        let user = self
+            .users(self.database()?)
             .find_one(doc! { "_id": object_id })
             .await?
             .ok_or_else(|| AuthError::InvalidParams("user not found".to_owned()))?;
@@ -799,14 +847,16 @@ impl JsonRpcAuthServer for MongoAuthServer {
                 .into_iter()
                 .map(|(key, value)| (format!("profile.{key}"), value))
                 .collect::<Document>();
-            let result = users(self.database()?)
+            let result = self
+                .users(self.database()?)
                 .update_one(doc! { "_id": object_id }, doc! { "$set": updates })
                 .await?;
             if result.matched_count == 0 {
                 return Err(AuthError::InvalidParams("user not found".to_owned()));
             }
         }
-        let user = users(self.database()?)
+        let user = self
+            .users(self.database()?)
             .find_one(doc! { "_id": object_id })
             .await?
             .ok_or_else(|| AuthError::InvalidParams("user not found".to_owned()))?;
@@ -822,14 +872,15 @@ impl JsonRpcAuthServer for MongoAuthServer {
         let object_id = parse_object_id(&user_id)?;
         let database = self.database()?;
         database
-            .collection::<Document>(ROLES)
+            .collection::<Document>(&self.collection_name(ROLES))
             .update_one(
                 doc! { "name": &role_name },
                 doc! { "$setOnInsert": { "name": &role_name, "permissions": [] } },
             )
             .upsert(true)
             .await?;
-        let result = users(database)
+        let result = self
+            .users(database)
             .update_one(
                 doc! { "_id": object_id },
                 doc! { "$addToSet": { "roles": role_name } },
@@ -847,7 +898,8 @@ impl JsonRpcAuthServer for MongoAuthServer {
         role_name: String,
     ) -> Result<(), Self::StorageError> {
         let object_id = parse_object_id(&user_id)?;
-        let result = users(self.database()?)
+        let result = self
+            .users(self.database()?)
             .update_one(
                 doc! { "_id": object_id },
                 doc! { "$pull": { "roles": role_name } },
@@ -867,7 +919,7 @@ impl JsonRpcAuthServer for MongoAuthServer {
         validate_name("role", &role_name)?;
         validate_name("permission", &permission_name)?;
         self.database()?
-            .collection::<Document>(ROLES)
+            .collection::<Document>(&self.collection_name(ROLES))
             .update_one(
                 doc! { "name": &role_name },
                 doc! {
@@ -886,7 +938,7 @@ impl JsonRpcAuthServer for MongoAuthServer {
         permission_name: String,
     ) -> Result<(), Self::StorageError> {
         self.database()?
-            .collection::<Document>(ROLES)
+            .collection::<Document>(&self.collection_name(ROLES))
             .update_one(
                 doc! { "name": role_name },
                 doc! { "$pull": { "permissions": permission_name } },
@@ -894,10 +946,6 @@ impl JsonRpcAuthServer for MongoAuthServer {
             .await?;
         Ok(())
     }
-}
-
-fn users(database: &Database) -> Collection<Document> {
-    database.collection(USERS)
 }
 
 fn parse_object_id(value: &str) -> Result<ObjectId, AuthError> {

@@ -290,6 +290,11 @@ The key must be a PASERK-encoded `k4.local` key; generate it once using
 the encoded value in a secret manager. All instances that validate the same
 tokens must use the same key.
 
+For an isolated MongoDB namespace, call `auth.set_collection_prefix("my_service_")?`
+before cloning or initializing the server. It prefixes `users`, `roles`,
+`external_identities`, and `sessions`; the default empty prefix preserves the
+original collection names. Changing the prefix does not migrate existing data.
+
 ## Cargo feature selection
 
 The crate is an optional dependency of the application that owns the
